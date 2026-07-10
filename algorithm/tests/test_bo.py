@@ -324,5 +324,89 @@ class TestRunBO(unittest.TestCase):
         self.assertEqual(len(best), len(bin_vars) + len(cont_vars))
 
 
+class TestLogScaleInputs(unittest.TestCase):
+    """12.5(b) 対数スケール化（bounds 比 50 倍超の正の連続変数を log 空間で探索）。"""
+
+    def test_mask_selects_wide_positive_bounds_on_seed(self) -> None:
+        """seed の4連続変数（area 比5000・p_permeate 比99）は全部 log 対象。"""
+        import bo as bo_mod
+        cont_vars = T.continuous_variables(_load_seed())
+        mask = bo_mod._log_scale_mask(0, cont_vars, enabled=True)
+        names = [cv["name"] for cv, m in zip(cont_vars, mask) if m]
+        self.assertEqual(
+            names, ["MEMB1_area", "MEMB1_p_perm", "MEMB2_area", "MEMB2_p_perm"])
+
+    def test_mask_excludes_narrow_nonpositive_and_binary(self) -> None:
+        """比 ≤50・下限 ≤0 の連続変数と binary 次元は対象外。"""
+        import bo as bo_mod
+        cont_vars = [
+            {"name": "narrow", "bounds": [1.0, 10.0]},    # 比10 ≤ 50 → 対象外
+            {"name": "nonpos", "bounds": [0.0, 100.0]},   # 下限0 → 対象外
+            {"name": "wide",   "bounds": [0.01, 10.0]},   # 比1000 → 対象
+        ]
+        mask = bo_mod._log_scale_mask(2, cont_vars, enabled=True)  # binary 2本
+        self.assertEqual(mask.tolist(), [False, False, False, False, True])
+
+    def test_mask_disabled_is_all_false(self) -> None:
+        """log_scale_inputs: off 相当（enabled=False）で全 False＝線形スケール。"""
+        import bo as bo_mod
+        cont_vars = T.continuous_variables(_load_seed())
+        mask = bo_mod._log_scale_mask(0, cont_vars, enabled=False)
+        self.assertFalse(mask.any())
+
+    def test_to_eval_space_exps_only_masked_columns(self) -> None:
+        """_to_eval_space は mask 列だけ exp し、binary・線形列は不変。"""
+        import math
+
+        import bo as bo_mod
+        import numpy as np
+        mask = np.array([False, True, False])
+        x = np.array([[1.0, math.log(20000.0), 0.5]])
+        out = bo_mod._to_eval_space(x, mask)
+        self.assertAlmostEqual(out[0, 0], 1.0)
+        self.assertAlmostEqual(out[0, 1], 20000.0, places=6)
+        self.assertAlmostEqual(out[0, 2], 0.5)
+        # 元配列は破壊しない
+        self.assertAlmostEqual(x[0, 1], math.log(20000.0))
+
+    def test_best_and_evaluated_x_within_original_bounds(self) -> None:
+        """log 有効（既定）でも evaluator が受ける x と best は元 bounds の実スケール内。"""
+        from bo import run_bo
+
+        cont_vars = T.continuous_variables(_load_seed())
+        bounds = [cv["bounds"] for cv in cont_vars]
+
+        class _RangeCheckMock(_SmoothMock):
+            def evaluate_topology(self, topology, x_list):
+                for x in x_list:
+                    for v, (lo, hi) in zip(x, bounds):
+                        assert lo - 1e-9 <= float(v) <= hi + 1e-9, \
+                            f"eval x={v} が bounds [{lo}, {hi}] 外（log 空間のまま渡った疑い）"
+                return super().evaluate_topology(topology, x_list)
+
+        ss = _load_seed()
+        case = _make_case()
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, _ = run_bo(ss, case, _RangeCheckMock(), seed=31)
+        for v, (lo, hi) in zip(best, bounds):
+            self.assertGreaterEqual(v, lo - 1e-9)
+            self.assertLessEqual(v, hi + 1e-9)
+
+    def test_log_scale_off_restores_legacy_and_completes(self) -> None:
+        """log_scale_inputs: off（YAML の bool False も含む）で線形スケールのまま完走する。"""
+        from bo import run_bo
+        ss = _load_seed()
+        for off_value in ("off", False):
+            case = _make_case({"log_scale_inputs": off_value})
+            with redirect_stdout(io.StringIO()):
+                best, gen_log, _ = run_bo(ss, case, _SmoothMock(), seed=32)
+            self.assertEqual(len(gen_log), _TEST_BO["n_iter"])
+            cont_vars = T.continuous_variables(ss)
+            for v, cv in zip(best, cont_vars):
+                lo, hi = cv["bounds"]
+                self.assertGreaterEqual(v, lo - 1e-9)
+                self.assertLessEqual(v, hi + 1e-9)
+
+
 if __name__ == "__main__":
     unittest.main()

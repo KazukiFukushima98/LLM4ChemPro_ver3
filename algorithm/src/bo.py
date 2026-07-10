@@ -20,8 +20,13 @@ ga.py と差し替え可能な run_bo(ss, case, evaluator, seed) シグネチャ
     - best_f は feasible（両制約満たす）観測のうち energy 最良。**全 infeasible のまま
       終了した場合は min-shortfall の観測を返す**（同率は penalty 込み fitness で
       tie-break。12.5(a)。bootstrap: off なら旧来の penalty-min）
-    - **ロールバック口**: case.yaml の bo: に `bootstrap: off` / `retry_bad: 0` を書けば
-      コード変更なしで run21 までの挙動に戻る
+    - **対数スケール化（12.5(b)）**: bounds 比 50 倍超の正の連続変数（area 5000倍、
+      Robeson permeance も対象になる）は GP/acqf/Sobol の内部表現を log 空間にする。
+      線形 Normalize では細い盆地（面積軸の 0.6% 等）が正規化空間で潰れて GP に
+      見えない問題と高カット basin 捕捉への本命対処。evaluator へ渡す直前と best
+      返却時のみ実スケールへ戻す
+    - **ロールバック口**: case.yaml の bo: に `bootstrap: off` / `retry_bad: 0` /
+      `log_scale_inputs: off` を書けばコード変更なしで旧挙動に戻る
 
 パイプライン:
     1. Sobol 初期サンプル（n_init 点）
@@ -78,7 +83,14 @@ _BO_DEFAULTS: dict[str, Any] = {
     # 一時的 wedge（実測15-20%）が purity=0/recovery=0 の偽 infeasible として
     # GP を汚染するのを防ぐ。リトライしても bad ＝ 真の非収束として学習される。
     "retry_bad": 1,
+    # 連続変数の対数スケール化（12.5(b)）。bounds 比が _LOG_SCALE_RATIO 倍を超える
+    # 正の連続変数（area 5000倍・Robeson permeance が該当）を GP/acqf/Sobol の
+    # 内部表現で log 変換する。"off" で run23 までの線形スケールに戻る（ロールバック口）。
+    "log_scale_inputs": "on",
 }
+
+# log 変換対象の bounds 比しきい値（12.5(b)：「bounds 比 50 倍超の正の連続変数」）
+_LOG_SCALE_RATIO = 50.0
 
 
 def _is_off(value: Any) -> bool:
@@ -91,6 +103,33 @@ def _is_off(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ("off", "false", "no", "0")
     return value is None or value is False or value == 0
+
+
+def _log_scale_mask(n_bin: int, cont_vars: list[dict], enabled: bool) -> np.ndarray:
+    """内部表現（GP/acqf/Sobol）で log 変換する次元のマスクを返す（長さ d = n_bin + n_cont）。
+
+    対象は「下限が正で bounds 比 > _LOG_SCALE_RATIO の連続変数」。binary 次元は常に False。
+    enabled=False（log_scale_inputs: off）なら全 False＝線形スケール（旧挙動）。
+    """
+    mask = np.zeros(n_bin + len(cont_vars), dtype=bool)
+    if not enabled:
+        return mask
+    for j, cv in enumerate(cont_vars):
+        lo, hi = float(cv["bounds"][0]), float(cv["bounds"][1])
+        if lo > 0.0 and hi / lo > _LOG_SCALE_RATIO:
+            mask[n_bin + j] = True
+    return mask
+
+
+def _to_eval_space(x_np: np.ndarray, log_mask: np.ndarray) -> np.ndarray:
+    """内部表現（log 空間の列を含む）を evaluator に渡す実スケールへ変換する。
+
+    x_np は (N, d)。log_mask の立った列だけ exp する（binary・線形列はそのまま）。
+    """
+    out = x_np.copy()
+    if log_mask.any():
+        out[:, log_mask] = np.exp(out[:, log_mask])
+    return out
 
 
 def _fitness(m: Metrics, targets: dict, penalty_w: float) -> float:
@@ -316,12 +355,19 @@ def run_bo(
     # "shortfall" | "off"。YAML 1.1 は `off` を bool False にパースするので _is_off で吸収
     bootstrap_on = not _is_off(bo_cfg.get("bootstrap", "shortfall"))
     retry_bad    = int(bo_cfg.get("retry_bad", 1))
+    log_scale_on = not _is_off(bo_cfg.get("log_scale_inputs", "on"))
 
     device = _select_device()
     dtype  = torch.double
 
-    # bounds: shape (2, d)。binary 部分は [0,1]、continuous は cv["bounds"]。
+    # 対数スケール化（12.5(b)）: 対象次元は内部表現（bounds/Sobol/GP/acqf）を log 空間に
+    # 統一し、evaluator へ渡す直前と best 返却時だけ _to_eval_space で実スケールへ戻す。
+    log_mask = _log_scale_mask(n_bin, cont_vars, log_scale_on)
+
+    # bounds: shape (2, d)。binary 部分は [0,1]、continuous は cv["bounds"]（log 対象は log 空間）。
     bounds_list = [[0.0, 1.0]] * n_bin + [list(cv["bounds"]) for cv in cont_vars]
+    for k in np.flatnonzero(log_mask):
+        bounds_list[k] = [float(np.log(bounds_list[k][0])), float(np.log(bounds_list[k][1]))]
     bounds = torch.tensor(bounds_list, dtype=dtype, device=device).T  # (2, d)
 
     # 再現性: torch 側の全乱数を seed で固定（Sobol は engine の seed で別途）
@@ -330,16 +376,20 @@ def run_bo(
     cat_dims = list(range(n_bin))
     fixed_features_list = _build_fixed_features(ss, bin_vars)
 
+    log_scaled_names = [cont_vars[k - n_bin]["name"] for k in np.flatnonzero(log_mask)]
     print(f"[CBO] device={device}, d={d} (binary={n_bin}, cont={n_cont}), "
           f"n_init={n_init}, n_iter={n_iter}, q_batch={q_batch}, "
           f"fixed_features={len(fixed_features_list)}/{2**n_bin} (unbuildable excluded), "
           f"bootstrap={'shortfall' if bootstrap_on else 'off'}, retry_bad={retry_bad}, "
+          f"log_scale={log_scaled_names if log_scaled_names else 'off'}, "
           f"constraints: purity≥{purity_min}, recovery≥{recovery_min}")
 
     # ----- 1. Sobol 初期サンプル -----
+    # train_x_np は内部表現（log 対象列は log 空間＝log-uniform サンプリングになる）
     train_x_np = _sobol_initial(n_init, bounds, n_bin, seed).detach().cpu().numpy()
     e_arr, p_arr, r_arr, v_mask, n_evals = _evaluate_batch_multi(
-        train_x_np, ss, bin_vars, n_bin, evaluator, retry_bad=retry_bad
+        _to_eval_space(train_x_np, log_mask), ss, bin_vars, n_bin, evaluator,
+        retry_bad=retry_bad
     )
 
     # 全観測を tensor へ（GP には energy クリップ版を渡す、ロギング fitness は raw を使う）
@@ -434,10 +484,11 @@ def run_bo(
             # seed は反復ごとに変えて重複サンプルを避ける（再現性は seed 起点で保たれる）
             candidates = _sobol_initial(q_batch, bounds, n_bin, seed=seed * 10007 + it + 1)
 
-        # 評価
+        # 評価（candidates は内部表現なので実スケールへ戻して渡す）
         c_np = candidates.detach().cpu().numpy()
         new_e, new_p, new_r, new_v, n_new = _evaluate_batch_multi(
-            c_np, ss, bin_vars, n_bin, evaluator, retry_bad=retry_bad
+            _to_eval_space(c_np, log_mask), ss, bin_vars, n_bin, evaluator,
+            retry_bad=retry_bad
         )
 
         # 観測を蓄積
@@ -496,7 +547,8 @@ def run_bo(
             best_idx = int(np.lexsort((all_fitness, shortfall))[0])
         else:
             best_idx = int(np.argmin(all_fitness))
-    best_x = all_x[best_idx].detach().cpu().numpy()
+    # all_x は内部表現（log 空間含む）なので実スケールへ戻して返す
+    best_x = _to_eval_space(all_x[best_idx].detach().cpu().numpy().reshape(1, -1), log_mask)[0]
     best_individual: list[float] = [float(v) for v in best_x]
 
     return best_individual, gen_log, n_evals
