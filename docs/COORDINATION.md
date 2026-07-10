@@ -37,13 +37,13 @@ ver2（完成・`v2.0-complete`）の追跡ツリーを継承して本リポジ�
 4. **run24 準備**：`algorithm/CLAUDE.md` playbook 更新（新ユニット params の permeance
    直指定廃止・改善判定軸を cost に・membrane_model/economics の説明）→ run24 開始
    （membrane_model.tie: true で）→ **12.6 ablation**
-5. ss_seed.json の膜 params（area 20000 m² は新 bounds [1e5,1.5e6] の外）：GA が毎評価
-   上書きするので機能上は無害だが、初期値として不整合。人間が更新するか要判断。
+
+（済 `7b2d305`：ss_seed の膜 area を 500000 m² に更新（ユーザ指示）。reference/（参照論文
+PDF）を gitignore 化。）
 
 ### 未決（人間の判断・承認が要るもの）
 
 - 全結合 ablation 用の seed（`ss_seed_fullyconnected.json` 相当）の承認（12.6）
-- ss_seed.json の膜 params 更新（上記。area を bounds 内の値へ、任意）
 
 ### 検証項目（run24 前の Aspen 実機 smoke で一括確認）
 
