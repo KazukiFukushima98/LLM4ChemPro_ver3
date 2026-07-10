@@ -20,8 +20,14 @@ BAD_VALUE: float = 1.0e6
 
 # economics: セクションの既定値（Lee et al., J. Membr. Sci. 563 (2018) Table 1）。
 # case.yaml の economics: で上書き可能（人間管理）。
-# 注: 熱交換器コスト（Chx=300 $/m2）はフローシートに冷却器を持たないため**省略**
-# （2026-07-10 ユーザ決定）。膨張機は 12.4 で実装されるまで負の WNET が現れない。
+# 注1: 熱交換器コスト（Chx=300 $/m2）はフローシートに冷却器を持たないため**省略**
+#     （2026-07-10 ユーザ決定）。膨張機は 12.4 で実装されるまで負の WNET が現れない。
+# 注2: 圧力機器の CAPEX は **C_unit × |WNET|（電気動力そのまま・η で割らない）**。
+#     Lee Eq.16 の字面（C·W/η）どおりに電気動力を η で割ると論文の実測値
+#     （Fig.3/4 の C_cap）より系統的に +8〜10% 過大になることを4設計の再現計算で確認
+#     （2026-07-10）。Eq.16 の W/η は「等エントロピー仕事→実動力」の換算であり、
+#     Aspen の WNET は既に実動力なので追加の除算は不要。η なし＋HX 省略で
+#     論文値との差は全4設計で −2% 前後（≒省略した HX 分）に収まる。
 ECONOMICS_DEFAULTS: dict[str, float] = {
     "membrane_cost": 50.0,          # $/m2（モジュール・スキッド込み）
     "compressor_cost": 670.0,       # $/kW
@@ -31,10 +37,6 @@ ECONOMICS_DEFAULTS: dict[str, float] = {
     "capital_charge_rate": 0.2,     # /y（年間資本賦課率）
     "electricity_cost": 0.04,       # $/kWh
     "operating_hours": 7446.0,      # h/y（稼働率 85%）
-    "pressure_unit_efficiency": 0.72,  # η。CAPEX 式 C·W/η（Lee Eq.16 の形）に使う。
-                                       # シミュレーション（Aspen Compr の既定等エントロピー
-                                       # 効率 0.72）と統一（2026-07-10 ユーザ決定。Lee は 0.8。
-                                       # 実際の既定値は run24 前 smoke でノード読取確認）
     "penalty_weight": 1000.0,       # コスト目的の shortfall² 係数（Lee の r）
 }
 
@@ -77,9 +79,12 @@ def cost_per_tco2(
     """年間換算 CO2 回収コスト [$/tCO2] を合成する（Lee 2018 Eq.15/16、HX 項は省略）。
 
         cost = (capital_charge · f_in · C_TCC) / (M_CO2 · t_op) + E · Ce
-        C_TCC = Σ_memb Cm·A + Σ_blk C_unit(blk) · |WNET_blk| / η
+        C_TCC = Σ_memb Cm·A + Σ_blk C_unit(blk) · |WNET_blk|
         M_CO2 = recovery × feed CO2 質量流量 [t/h]
         E     = 比エネルギー [kWh/tCO2]（OPEX/tCO2 = E · Ce と等価）
+
+    WNET は電気動力そのものとして扱い η では割らない（ECONOMICS_DEFAULTS 注2。
+    Lee Fig.3/4 の4設計で論文 C_cap との一致を確認済み・差 −2% ≒ HX 省略分）。
 
     Parameters
     ----------
@@ -100,10 +105,9 @@ def cost_per_tco2(
     if m_co2 <= 0.0:
         return BAD_VALUE
 
-    eta = float(econ["pressure_unit_efficiency"])
     c_tcc = sum(float(econ["membrane_cost"]) * float(a) for a in membrane_areas.values())
     c_tcc += sum(
-        _pressure_unit_cost_per_kw(blk, w, econ) * abs(float(w)) / eta
+        _pressure_unit_cost_per_kw(blk, w, econ) * abs(float(w))
         for blk, w in metrics.energy_breakdown.items()
     )
 

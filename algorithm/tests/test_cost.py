@@ -61,13 +61,13 @@ class TestCostPerTCO2(unittest.TestCase):
     AREAS = {"MEMB1": 500000.0}   # m2
 
     def test_matches_hand_computed_value(self):
-        # η=0.72（Aspen Compr 既定と統一・2026-07-10 決定）
-        # C_TCC = 50*5e5 + 1341*50000/0.72 + 670*30000/0.72 = 146,041,667 $
-        # 年間 CAPEX = 0.2*1.6*C_TCC = 46,733,333 $/y
+        # CAPEX = C·|WNET|（電気動力そのまま。η では割らない——Lee Fig.3/4 再現で確認）
+        # C_TCC = 50*5e5 + 1341*50000 + 670*30000 = 112,150,000 $
+        # 年間 CAPEX = 0.2*1.6*C_TCC = 35,888,000 $/y
         # M_CO2 = 0.9 * 2440*(6.6/30.4) = 476.763 t/h → 年間 3,549,978 t
-        # capex/t = 13.164、opex/t = 300*0.04 = 12.0 → 合計 ≈ 25.16 $/t
+        # capex/t = 10.109、opex/t = 300*0.04 = 12.0 → 合計 ≈ 22.11 $/t
         cost = cost_per_tco2(self.METRICS, self.AREAS, _case())
-        self.assertAlmostEqual(cost, 25.16, delta=0.01)
+        self.assertAlmostEqual(cost, 22.11, delta=0.01)
 
     def test_opex_term_equals_spec_e_times_ce(self):
         # 膜も圧力機器も無ければ CAPEX=0 → cost = E*Ce
@@ -83,8 +83,8 @@ class TestCostPerTCO2(unittest.TestCase):
             energy_breakdown={**self.METRICS.energy_breakdown, "EXP1": -10000.0},
         )
         cost = cost_per_tco2(m_exp, self.AREAS, _case())
-        # 追加 CAPEX/t = 0.32 * 500*10000/0.72 / (476.763*7446) ≈ 0.6260 $/t
-        self.assertAlmostEqual(cost - base, 0.6260, delta=0.001)
+        # 追加 CAPEX/t = 0.32 * 500*10000 / (476.763*7446) ≈ 0.4507 $/t
+        self.assertAlmostEqual(cost - base, 0.4507, delta=0.001)
 
     def test_bad_metrics_returns_bad(self):
         self.assertEqual(cost_per_tco2(Metrics.bad(), self.AREAS, _case()), BAD_VALUE)
@@ -100,6 +100,57 @@ class TestCostPerTCO2(unittest.TestCase):
                                      _case({"membrane_cost": 0.0}))
         # 膜項 = 0.32 * 50*5e5 / (476.763*7446) ≈ 2.254 $/t
         self.assertAlmostEqual(cost_default - cost_free, 2.254, delta=0.005)
+
+
+class TestLeeReproduction(unittest.TestCase):
+    """Lee et al. (2018) Fig.3/Fig.4 の4設計で論文記載の C_cap を再現できること。
+
+    各図に記載の膜面積・機器別動力・製品流量（61.5 Nm³/s, 95% CO2）をそのまま入力し、
+    論文の C_cap [$/tCO2] と比較する。我々は HX コストを意図的に省略しているため、
+    期待値は「論文より 1〜3% 低い」（4設計の実測: −1.9〜−2.2%）。
+    η で割る誤実装（+8〜10%）へ退行しないための回帰テスト。
+    """
+
+    # Lee の feed: 500 Nm³/s, 13 mol% CO2（0°C, 22.414 L/mol）
+    _LEE_FEED = {
+        "flowbase": "MASS", "basis": "MOLE-FRAC",
+        "totflow": 500.0 / 0.022414 * (0.13 * 44.0 + 0.87 * 28.0) * 3.6,  # ≈2,415,633 kg/h
+        "co2_frac": 0.13,
+    }
+    _RECOVERY = (61.5 * 0.95) / (500.0 * 0.13)   # 0.8988（全4設計共通）
+
+    _DESIGNS = [
+        # (名称, 論文 C_cap, 面積 {unit: m2}, 動力 {block: kW}（負=膨張機）)
+        ("Fig3a 2段 no-recycle", 42.5,
+         {"MEMB1": 1025913.0, "MEMB2": 100789.0},
+         {"COMP1": 91500.0, "VP1": 50500.0, "COMP2": 19000.0,
+          "VP2": 29700.0, "EXP1": -33000.0, "EXP2": -3500.0}),
+        ("Fig3b 3段 no-recycle", 42.1,
+         {"MEMB1": 1338588.0, "MEMB2": 486908.0, "MEMB3": 351678.0},
+         {"COMP1": 79700.0, "VP1": 40500.0, "COMP2": 20200.0,
+          "VP2": 4900.0, "VP3": 17100.0, "EXP1": -29400.0, "EXP2": -2800.0}),
+        ("Fig4a 2段 recycle", 36.3,
+         {"MEMB1": 1125888.0, "MEMB2": 97648.0},
+         {"COMP1": 81100.0, "VP1": 51100.0, "COMP2": 23300.0,
+          "VP2": 4700.0, "EXP1": -31400.0, "EXP2": -1300.0}),
+        ("Fig4b 3段 recycle", 36.6,
+         {"MEMB1": 1185158.0, "MEMB2": 393146.0, "MEMB3": 72772.0},
+         {"COMP1": 70200.0, "VP1": 49700.0, "COMP2": 7700.0,
+          "VP2": 2500.0, "VP3": 13800.0, "EXP1": -30100.0}),
+    ]
+
+    def test_all_four_designs_within_hx_margin(self):
+        case = {"feed": dict(self._LEE_FEED), "economics": {}}   # Lee Table 1 既定
+        m_co2 = self._RECOVERY * feed_co2_t_per_h(self._LEE_FEED)
+        for name, paper, areas, breakdown in self._DESIGNS:
+            spec_e = sum(breakdown.values()) / m_co2
+            m = Metrics(specific_energy=spec_e, purity=0.95,
+                        recovery=self._RECOVERY, energy_breakdown=breakdown)
+            cost = cost_per_tco2(m, areas, case)
+            rel = (cost - paper) / paper
+            self.assertGreater(rel, -0.03, f"{name}: {cost:.2f} vs 論文 {paper}（低すぎ）")
+            self.assertLess(rel, 0.0, f"{name}: {cost:.2f} vs 論文 {paper}"
+                                      f"（HX 省略なのに論文以上＝η 誤除算の退行疑い）")
 
 
 class TestMembraneAreasFromX(unittest.TestCase):
