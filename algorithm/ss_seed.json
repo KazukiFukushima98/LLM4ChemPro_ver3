@@ -30,7 +30,7 @@
       "params": {
         "permeance_CO2": 2.70677,
         "permeance_N2": 0.0541354,
-        "area": 20000.0,
+        "area": 500000.0,
         "p_permeate": 0.2
       }
     },
@@ -41,7 +41,7 @@
       "params": {
         "permeance_CO2": 2.70677,
         "permeance_N2": 0.0541354,
-        "area": 20000.0,
+        "area": 500000.0,
         "p_permeate": 0.1
       }
     }

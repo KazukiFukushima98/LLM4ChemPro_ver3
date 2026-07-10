@@ -26,6 +26,9 @@ algorithm/src/YAspen/*
 !algorithm/src/YAspen/YAspen.bkp
 ~$*
 
+# --- Reference literature (著作物 PDF。公開リポジトリに含めない) ---
+reference/
+
 # --- OS / editor ---
 .DS_Store
 .idea/
