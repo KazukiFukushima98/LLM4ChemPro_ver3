@@ -579,6 +579,55 @@ class TestVariableDerivation(unittest.TestCase):
 
 
 # =========================================================
+# x_for_topology（pruning 後トポロジーへの連続 x の整列）
+# =========================================================
+
+class TestXForTopology(unittest.TestCase):
+
+    def _cv(self, unit: str, param: str) -> dict:
+        return {"name": f"{unit}_{param}", "unit_param": [unit, param], "bounds": [0.0, 1.0]}
+
+    def test_middle_unit_pruned_keeps_alignment(self):
+        """途中のユニットが prune されても、後続ユニットの値が位置ずれしない。"""
+        cont_vars = [
+            self._cv("MEMB1", "area"), self._cv("MEMB1", "p_permeate"),
+            self._cv("MEMB2", "area"), self._cv("MEMB2", "p_permeate"),
+            self._cv("MEMB3", "area"), self._cv("MEMB3", "p_permeate"),
+        ]
+        # MEMB2 だけ prune された具体トポロジー
+        topology = {"units": {"MEMB1": {}, "MEMB3": {}}}
+        x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        # MEMB2 の (3,4) が落ち、MEMB3 に (5,6) が正しく残る
+        self.assertEqual(T.x_for_topology(x, cont_vars, topology), [1.0, 2.0, 5.0, 6.0])
+
+    def test_wildcard_kept_iff_prefix_unit_survives(self):
+        """"MEMB*"（tie 共有変数）は膜が1つでも残っていれば保持、全滅なら落ちる。"""
+        cont_vars = [
+            {"name": "MEMB_perm", "unit_param": ["MEMB*", "permeance_CO2"], "bounds": [1.0, 16.0]},
+            self._cv("MEMB1", "area"),
+            self._cv("COMP1", "outlet_pressure"),
+        ]
+        x = [10.0, 20.0, 30.0]
+        with_memb = {"units": {"MEMB1": {}, "COMP1": {}}}
+        self.assertEqual(T.x_for_topology(x, cont_vars, with_memb), [10.0, 20.0, 30.0])
+        no_memb = {"units": {"COMP1": {}}}
+        self.assertEqual(T.x_for_topology(x, cont_vars, no_memb), [30.0])
+
+    def test_consistent_with_active_topology_pruning(self):
+        """実際の pruning（bypass トグル OFF）後の continuous_variables と 1:1 に揃う。"""
+        ss = make_bypass_toggle_ss()
+        template_cvs = T.continuous_variables(ss)
+        self.assertEqual(len(template_cvs), 4)  # MEMB1/MEMB2 × (area, p_perm)
+        topo = T.active_topology(ss, {"q_1": 0, "q_2": 1})  # MEMB2 pruned
+        x = [11.0, 0.2, 22.0, 0.3]
+        filtered = T.x_for_topology(x, template_cvs, topo)
+        topo_cvs = T.continuous_variables(topo)
+        self.assertEqual(len(filtered), len(topo_cvs))
+        self.assertEqual([cv["name"] for cv in topo_cvs], ["MEMB1_area", "MEMB1_p_perm"])
+        self.assertEqual(filtered, [11.0, 0.2])
+
+
+# =========================================================
 # unit_registry
 # =========================================================
 

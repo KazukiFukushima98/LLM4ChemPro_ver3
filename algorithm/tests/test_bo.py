@@ -25,6 +25,13 @@ from evaluator import BAD_VALUE, DetailedResult, Metrics  # noqa: E402
 
 SEED_PATH = os.path.normpath(os.path.join(HERE, "..", "ss_seed.json"))
 
+# bypass トグル SS fixture（gated 膜の pruning 検証用）。
+# discover（-s tests）では top-level、`-m unittest tests.test_bo` ではパッケージ名になる。
+try:
+    from test_topology import make_bypass_toggle_ss
+except ImportError:  # pragma: no cover
+    from tests.test_topology import make_bypass_toggle_ss
+
 
 def _load_seed() -> dict:
     return T.load_ss(SEED_PATH)
@@ -322,6 +329,45 @@ class TestRunBO(unittest.TestCase):
         bin_vars  = T.binary_variables(ss)
         cont_vars = T.continuous_variables(ss)
         self.assertEqual(len(best), len(bin_vars) + len(cont_vars))
+
+
+class TestXAlignmentWithPruning(unittest.TestCase):
+    """連続 x が具体トポロジー（pruning 後）の変数だけに絞られて evaluator に渡ること。
+
+    修正前は「テンプレート全次元の x」と「pruned topology の continuous_variables」を
+    位置 zip していたため、途中ユニットの pruning で後続ユニットに前のユニットの値が
+    書かれる整列バグがあった（topology.x_for_topology で修正）。
+    """
+
+    def test_evaluate_batch_filters_x_to_topology(self) -> None:
+        import numpy as np
+
+        import bo as bo_mod
+        ss = make_bypass_toggle_ss()
+        bin_vars  = T.binary_variables(ss)
+        cont_vars = T.continuous_variables(ss)
+        self.assertEqual(len(bin_vars), 2)
+        self.assertEqual(len(cont_vars), 4)
+
+        seen: list[tuple[int, int]] = []  # (トポロジーのユニット数, 受け取った x の次元)
+
+        class _DimRecorder(_SmoothMock):
+            def evaluate_topology(self, topology, x_list):
+                for x in x_list:
+                    seen.append((len(topology["units"]), len(x)))
+                return super().evaluate_topology(topology, x_list)
+
+        # 列: [q_1, q_2 | MEMB1_area, MEMB1_p_perm, MEMB2_area, MEMB2_p_perm]
+        x_np = np.array([
+            [1.0, 0.0, 200000.0, 0.5, 300000.0, 0.4],  # 2段 → x は 4 変数
+            [0.0, 1.0, 200000.0, 0.5, 300000.0, 0.4],  # MEMB2 prune → x は 2 変数
+        ])
+        e, p, r, v, n = bo_mod._evaluate_batch_multi(
+            x_np, ss, bin_vars, cont_vars, 2, _DimRecorder(), retry_bad=0
+        )
+        self.assertIn((2, 4), seen, f"2段側の次元が不正: {seen}")
+        self.assertIn((1, 2), seen, f"pruned 側の次元が不正: {seen}")
+        self.assertTrue(all(v))
 
 
 class TestLogScaleInputs(unittest.TestCase):

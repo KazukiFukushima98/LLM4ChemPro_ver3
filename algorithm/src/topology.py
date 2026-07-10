@@ -731,6 +731,36 @@ def continuous_variables(ss: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def x_for_topology(
+    x_cont: list[float],
+    cont_vars: list[dict[str, Any]],
+    topology: dict[str, Any],
+) -> list[float]:
+    """テンプレート次元の連続値ベクトルを、具体トポロジーに存在する変数だけに絞る。
+
+    optimizer（ga/bo/run_iteration）はテンプレート ss 由来の全連続変数の x を持つが、
+    evaluator は具体トポロジー（dead-unit pruning 後）の `continuous_variables` と
+    **位置 zip** する。pruning で「途中の」ユニットが消えると位置がずれ、後続ユニットに
+    前のユニットの値が書き込まれる（gated unit が2つ以上あり片方だけ prune された場合に
+    顕在化する整列バグ）。テンプレート順を保ったままトポロジー非存在ユニットの値を
+    落とすことで、evaluator 側の zip と 1:1 に揃える。
+
+    unit 名が "*" で終わるエントリ（例 "MEMB*"＝tie された膜共有変数）は、その
+    プレフィクスを持つユニットが具体トポロジーに1つでも残っていれば保持する。
+    """
+    units = topology.get("units", {})
+    out: list[float] = []
+    for val, cv in zip(x_cont, cont_vars):
+        uname = cv["unit_param"][0]
+        if uname.endswith("*"):
+            prefix = uname[:-1]
+            if any(u.startswith(prefix) for u in units):
+                out.append(float(val))
+        elif uname in units:
+            out.append(float(val))
+    return out
+
+
 # =========================================================
 # 隣接行列（論文用）
 # =========================================================

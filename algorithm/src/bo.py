@@ -61,7 +61,13 @@ from torch.quasirandom import SobolEngine
 sys.path.insert(0, os.path.dirname(__file__))
 
 from evaluator import BAD_VALUE, Evaluator, Metrics  # noqa: E402
-from topology import active_topology, binary_variables, continuous_variables, is_buildable  # noqa: E402
+from topology import (  # noqa: E402
+    active_topology,
+    binary_variables,
+    continuous_variables,
+    is_buildable,
+    x_for_topology,
+)
 
 
 # bo: セクションが case.yaml に無い場合の defaults（n_init ≈ 2-3d 目安、d=binary+continuous）
@@ -151,6 +157,7 @@ def _evaluate_batch_multi(
     x_np: np.ndarray,
     ss: dict,
     bin_vars: list[dict],
+    cont_vars: list[dict],
     n_bin: int,
     evaluator: Evaluator,
     retry_bad: int = 1,
@@ -158,7 +165,8 @@ def _evaluate_batch_multi(
     """binary key でグループ化 → 各グループを 1 ビルドで一括評価。3 outcome を返す。
 
     GA の `_evaluate_population` と同じ畳み込み（同一 binary に固まった点は 1 Aspen build
-    で q 点まとめて simulate）。
+    で q 点まとめて simulate）。連続 x はテンプレート全次元から `x_for_topology` で
+    具体トポロジー（pruning 後）の変数だけに絞って渡す（evaluator 側の位置 zip との整列）。
 
     retry_bad > 0 のとき、ビルド可能なのに bad が返った x だけを同一トポロジーで
     再評価する（最大 retry_bad 回）。一時的 COM wedge（実測15-20%）による偽の
@@ -194,7 +202,7 @@ def _evaluate_batch_multi(
         if reason is not None:
             metrics_list = [Metrics.bad() for _ in items]
         else:
-            x_list = [x_cont for _, x_cont in items]
+            x_list = [x_for_topology(x_cont, cont_vars, topology) for _, x_cont in items]
             metrics_list = evaluator.evaluate_topology(topology, x_list)
             # 一時的 wedge 対策: bad だけを再評価（真の非収束は retry 後も bad のまま）
             for _ in range(max(0, retry_bad)):
@@ -388,7 +396,7 @@ def run_bo(
     # train_x_np は内部表現（log 対象列は log 空間＝log-uniform サンプリングになる）
     train_x_np = _sobol_initial(n_init, bounds, n_bin, seed).detach().cpu().numpy()
     e_arr, p_arr, r_arr, v_mask, n_evals = _evaluate_batch_multi(
-        _to_eval_space(train_x_np, log_mask), ss, bin_vars, n_bin, evaluator,
+        _to_eval_space(train_x_np, log_mask), ss, bin_vars, cont_vars, n_bin, evaluator,
         retry_bad=retry_bad
     )
 
@@ -487,7 +495,7 @@ def run_bo(
         # 評価（candidates は内部表現なので実スケールへ戻して渡す）
         c_np = candidates.detach().cpu().numpy()
         new_e, new_p, new_r, new_v, n_new = _evaluate_batch_multi(
-            _to_eval_space(c_np, log_mask), ss, bin_vars, n_bin, evaluator,
+            _to_eval_space(c_np, log_mask), ss, bin_vars, cont_vars, n_bin, evaluator,
             retry_bad=retry_bad
         )
 

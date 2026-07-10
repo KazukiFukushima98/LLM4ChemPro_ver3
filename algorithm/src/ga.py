@@ -19,7 +19,13 @@ from deap import base, creator, tools
 sys.path.insert(0, os.path.dirname(__file__))
 
 from evaluator import BAD_VALUE, Evaluator, Metrics  # noqa: E402
-from topology import active_topology, binary_variables, continuous_variables, is_buildable  # noqa: E402
+from topology import (  # noqa: E402
+    active_topology,
+    binary_variables,
+    continuous_variables,
+    is_buildable,
+    x_for_topology,
+)
 
 
 def _fitness(m: Metrics, targets: dict, penalty_w: float) -> float:
@@ -123,7 +129,12 @@ def run_ga(
                 # ビルド不能な組み合わせ（非膜の分流）は Aspen を回さず BAD で落とす
                 metrics_list = [Metrics.bad() for _ in inds]
             else:
-                x_list = [list(ind[n_binary:]) for ind in inds]
+                # 連続 x はテンプレート全次元 → 具体トポロジー（pruning 後）の変数だけに
+                # 絞って渡す（evaluator 側の位置 zip との整列。topology.x_for_topology）
+                x_list = [
+                    x_for_topology(list(ind[n_binary:]), cont_vars, topology)
+                    for ind in inds
+                ]
                 metrics_list = evaluator.evaluate_topology(topology, x_list)
             for ind, m in zip(inds, metrics_list):
                 ind.fitness.values = (_fitness(m, targets, penalty_w),)

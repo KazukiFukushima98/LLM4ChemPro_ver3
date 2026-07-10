@@ -27,7 +27,13 @@ import topology as T  # noqa: E402
 from evaluator import BAD_VALUE, DetailedResult, Metrics  # noqa: E402
 from ga import run_ga  # noqa: E402
 from subprocess_evaluator import SubprocessEvaluator, _default_kill_aspen  # noqa: E402
-from topology import active_topology, binary_variables, continuous_variables, is_buildable  # noqa: E402
+from topology import (  # noqa: E402
+    active_topology,
+    binary_variables,
+    continuous_variables,
+    is_buildable,
+    x_for_topology,
+)
 
 # bo.py は torch/botorch を import するため遅延 import（optimizer="ga" の既定経路では読まない）。
 
@@ -338,7 +344,9 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
         print(f"    best topology is unbuildable ({build_reason}) — detailed eval skipped")
         detailed = DetailedResult(metrics=Metrics.bad())
     else:
-        detailed = evaluate_detailed_with_retry(evaluator, topology_best, x_best)
+        # pruning 後トポロジーの変数だけに絞る（evaluator の位置 zip との整列）
+        x_best_topo = x_for_topology(x_best, cont_vars, topology_best)
+        detailed = evaluate_detailed_with_retry(evaluator, topology_best, x_best_topo)
 
     # 反復の評価がすべて終わったので、残留 AspenPlus.exe を回収する（次の評価までの
     # 外側ループ思考中にメモリ・ライセンスを占有し続けるのを防ぐ。逐次評価＝同時1個の
