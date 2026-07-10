@@ -1,0 +1,57 @@
+# Case constants — invariant across SST iterations.
+# Topology lives in ss_seed.json; this file holds everything that does NOT change
+# as the superstructure evolves.
+
+feed:
+  flowbase: MASS          # feed basis. Applied post-build (overrides builder defaults).
+  totflow: 1000.0
+  co2_frac: 0.15          # post-combustion. For DAC, set ~0.00042 (420 ppm).
+  temp: 25.0              # °C. Feed temperature.
+  pressure: 1.0           # bar. Feed pressure.
+  basis: MOLE-FRAC        # composition basis. FLOWBASE=MASS かつ BASIS=MOLE-FRAC の組み合わせ
+                          # が旧コードで動作実績あり（_configure_feed + evaluate_group の合成結果）。
+
+optimization_targets:
+  purity_min: 0.95        # CO2 product purity lower bound（CO2輸送規格相当。
+                          # 2026-07-07 に 0.90→0.95 へ引き上げ：1段の理論上限（α=50, feed15% で
+                          # y≈89.8%）を超えるため2段濃縮が必須になり、多段化圧力をかける）
+  recovery_min: 0.90      # CO2 recovery lower bound（DOE 回収目標相当。0.70→0.90 へ引き上げ：
+                          # 残渣 CO2 の回収が必須になり「巨大リサイクル vs 残渣側回収段」の
+                          # 構造競争を誘発する＝3段が出得る系にする）
+  objective: minimize_specific_energy
+
+penalty_weight: 100000.0  # PENALTY_W. Quadratic penalty on purity/recovery shortfall.
+                          # 1.0e5 は PyYAML（YAML 1.1）で string になる（指数符号が必須）ため整数表記。
+                          # CBO では獲得関数に使わずロギング fitness のみに影響。
+
+vp_outlet_pressure: 1.0   # bar. Auto-VP discharge pressure on each membrane permeate (fixed).
+
+# Aspen タイムアウト。整数 [秒]。
+# evaluate_topology は GA ループで多数回回るので短め、evaluate_detailed は best 1点だけなので緩め。
+# 段数を増やす遷移で詰まり始めたら個別に伸ばす（COORDINATION フェーズ4(2) 対応）。
+aspen_timeout_eval:   60
+aspen_timeout_detail: 120
+
+ga:
+  pop_size: 20
+  n_gen: 50
+
+optimizer: bo        # SST ループを BO で回す。GA に戻すときはこの行を削除 or `ga` に書き換え。
+
+bo:
+  n_init:  24        # 1.5x 設定（GA から移行後の到達点）
+  n_iter:  60
+  q_batch:  4       # SST ループを BO で回す
+
+# SST（外側ループ）の問題サイズ上限。遷移は変数空間を拡大せず「移動」させる。
+# 削除＋追加をセットで行い、総数がこの上限を超えないよう保つ。
+# バイナリは組合せ爆発する（2^n のトポロジー）ので別枠で絞り、連続は緩めに許容する。
+# ★調整の余地あり：実際の計算時間（GA pop×gen × ユニークトポロジー数 × Aspen評価）を見て見直すこと。
+#   連続変数を増やすと1トポロジーあたりのGA収束が重くなり、バイナリを増やすとトポロジー数が2^nで増える。
+max_variables: 20          # 総数（バイナリ＋連続）のゆるい上限。膨張トレンド防止用
+max_binary_variables: 8    # バイナリ（候補アーク）の上限。2^8=256 トポロジーまで
+                           #   （2026-07-07 に 6→8：高目標化でゲート段2つ(4本)＋リサイクル
+                           #   トグルペア2組(4本)が同時に載る余地を確保）
+min_variables: 4           # 総数の下限。縮退して遷移が死ぬのを防ぐ目安（弾くハード制約ではない）。
+                           #   構造下限（膜1段必須など）は設けない——破綻は validate が防ぎ、
+                           #   骨格を固定しない方が「想定外構造の提案」という手法の主張と整合する。
