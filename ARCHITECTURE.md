@@ -212,8 +212,8 @@ JSON はタプルキーを持てないため、アークは**リスト形式**�
 
 ```yaml
 feed:
-  flowbase: MASS
-  totflow: 1000.0
+  flowbase: MASS            # 注: 書き込みは実機で無効・TOTFLOW はモル [kmol/h] として効く（12.3）
+  totflow: 80307.0          # kmol/h（Lee の 500 Nm³/s）
   co2_frac: 0.15            # post-combustion。DAC にするならここを変える
   temp: 25.0                # °C
   pressure: 1.0             # bar
@@ -221,7 +221,7 @@ feed:
 optimization_targets:
   purity_min: 0.90
   recovery_min: 0.70
-  objective: minimize_specific_energy
+  objective: minimize_cost  # ver3 12.2。minimize_specific_energy で ver2 のエネルギー目的
 penalty_weight: 100000.0    # PENALTY_W（YAML1.1 で 1.0e5 は文字列になるため整数表記）
 vp_outlet_pressure: 1.0     # bar。auto-VP の出口圧（固定）
 aspen_timeout_eval: 60      # 秒。GA/BO ループ中の per-x タイムアウト
