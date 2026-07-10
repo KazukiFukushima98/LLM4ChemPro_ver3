@@ -61,12 +61,13 @@ class TestCostPerTCO2(unittest.TestCase):
     AREAS = {"MEMB1": 500000.0}   # m2
 
     def test_matches_hand_computed_value(self):
-        # C_TCC = 50*5e5 + 1341*50000/0.8 + 670*30000/0.8 = 133,937,500 $
-        # 年間 CAPEX = 0.2*1.6*C_TCC = 42,860,000 $/y
+        # η=0.72（Aspen Compr 既定と統一・2026-07-10 決定）
+        # C_TCC = 50*5e5 + 1341*50000/0.72 + 670*30000/0.72 = 146,041,667 $
+        # 年間 CAPEX = 0.2*1.6*C_TCC = 46,733,333 $/y
         # M_CO2 = 0.9 * 2440*(6.6/30.4) = 476.763 t/h → 年間 3,549,978 t
-        # capex/t = 12.073、opex/t = 300*0.04 = 12.0 → 合計 ≈ 24.07 $/t
+        # capex/t = 13.164、opex/t = 300*0.04 = 12.0 → 合計 ≈ 25.16 $/t
         cost = cost_per_tco2(self.METRICS, self.AREAS, _case())
-        self.assertAlmostEqual(cost, 24.07, delta=0.01)
+        self.assertAlmostEqual(cost, 25.16, delta=0.01)
 
     def test_opex_term_equals_spec_e_times_ce(self):
         # 膜も圧力機器も無ければ CAPEX=0 → cost = E*Ce
@@ -82,8 +83,8 @@ class TestCostPerTCO2(unittest.TestCase):
             energy_breakdown={**self.METRICS.energy_breakdown, "EXP1": -10000.0},
         )
         cost = cost_per_tco2(m_exp, self.AREAS, _case())
-        # 追加 CAPEX/t = 0.32 * 500*10000/0.8 / (476.763*7446) ≈ 0.5634 $/t
-        self.assertAlmostEqual(cost - base, 0.5634, delta=0.001)
+        # 追加 CAPEX/t = 0.32 * 500*10000/0.72 / (476.763*7446) ≈ 0.6260 $/t
+        self.assertAlmostEqual(cost - base, 0.6260, delta=0.001)
 
     def test_bad_metrics_returns_bad(self):
         self.assertEqual(cost_per_tco2(Metrics.bad(), self.AREAS, _case()), BAD_VALUE)

@@ -31,9 +31,10 @@ ECONOMICS_DEFAULTS: dict[str, float] = {
     "capital_charge_rate": 0.2,     # /y（年間資本賦課率）
     "electricity_cost": 0.04,       # $/kWh
     "operating_hours": 7446.0,      # h/y（稼働率 85%）
-    "pressure_unit_efficiency": 0.8,  # η。CAPEX 式 C·W/η（Lee Eq.16）にのみ使う。
-                                      # シミュレーション側は Aspen Compr の既定効率のまま
-                                      # （2026-07-10 ユーザ決定）
+    "pressure_unit_efficiency": 0.72,  # η。CAPEX 式 C·W/η（Lee Eq.16 の形）に使う。
+                                       # シミュレーション（Aspen Compr の既定等エントロピー
+                                       # 効率 0.72）と統一（2026-07-10 ユーザ決定。Lee は 0.8。
+                                       # 実際の既定値は run24 前 smoke でノード読取確認）
     "penalty_weight": 1000.0,       # コスト目的の shortfall² 係数（Lee の r）
 }
 

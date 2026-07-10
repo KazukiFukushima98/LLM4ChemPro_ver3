@@ -33,7 +33,8 @@ penalty_weight: 100000.0  # PENALTY_W. Quadratic penalty on purity/recovery shor
 # ver3 12.2: 経済定数（Lee et al. 2018 Table 1。人間管理）。
 # F_obj = (capital_charge · installation_factor · C_TCC) / (M_CO2 · t_op) + E·Ce + penalty
 # 熱交換器コスト（Chx）はフローシートに冷却器を持たないため省略（2026-07-10 決定）。
-# シミュレーションの圧縮機効率は Aspen Compr 既定のまま（同決定）。η は CAPEX 式のみ。
+# 圧縮機効率はシミュレーション（Aspen Compr 既定 0.72）と CAPEX 式の η を 0.72 に統一
+#（2026-07-10 決定。Lee は両方 0.8 なので、論文比較時は当方が ~11% 不利側と注記する）。
 economics:
   membrane_cost: 50.0             # $/m2（モジュール・スキッド込み）
   compressor_cost: 670.0          # $/kW
@@ -43,7 +44,10 @@ economics:
   capital_charge_rate: 0.2        # /y（年間資本賦課率 20%）
   electricity_cost: 0.04          # $/kWh
   operating_hours: 7446.0         # h/y（稼働率 85%）
-  pressure_unit_efficiency: 0.8   # η。CAPEX 式 C·W/η にのみ使用（Lee Eq.16）
+  pressure_unit_efficiency: 0.72  # η。CAPEX 式 C·W/η に使用（Lee Eq.16 の形）。
+                                  # シミュレーション（Aspen Compr 既定の等エントロピー効率
+                                  # 0.72）と統一（2026-07-10 決定。Lee の 0.8 とは意図的に
+                                  # 異なる＝論文比較時に注記する）
   penalty_weight: 1000.0          # コスト目的の shortfall² 係数（Lee の r）
 
 vp_outlet_pressure: 1.0   # bar. Auto-VP discharge pressure on each membrane permeate (fixed).
