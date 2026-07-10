@@ -616,45 +616,71 @@ ver2 で確立した手法（2〜11節）は凍結。ver3 は物理・経済設�
 **実装順の推奨**：12.5（アルゴリズム持ち越し・安い順）→ 12.1〜12.4（4本柱）→ run24 系開始。
 各項の実装は「テスト緑→コミット」の粒度で進め、case.yaml のスキーマ追加は人間の承認を得る。
 
-### 12.1 Robeson 膜モデル（段別膜物性の変数化）
+### 12.1 Robeson 膜モデル（段別膜物性の変数化）【実装済み 2026-07-10】
 
-膜物性を固定パラメータから**段別の最適化変数**に格上げする。ただし自由な2変数ではなく、
+膜物性を固定パラメータから**最適化変数**に格上げする。ただし自由な2変数ではなく、
 **Robeson 上限（CO2/N2）のトレードオフ曲線上の1自由度**として表現する（架空の万能膜を排除）。
 
 - **変数の向き（先行研究と同一）**：CO2 透過速度 `permeance_CO2` を連続変数とし、選択率を相関式で導出：
-  `α(P) = α_ref × (P/P_ref)^(−1/n)`、`permeance_N2 = permeance_CO2 / α`。
-  勾配は Robeson 2008 CO2/N2 上界（n ≈ 2.616）。
-- **アンカー**：現行膜（`P_ref = 2.70677`, `α_ref = 50`）を曲線上に置く。単位換算（Barrer/GPU・膜厚仮定）を
-  持ち込まず「現行膜と同世代の材料フロンティア上で選ぶ」という意味付けになる。
-- **探索範囲**：アンカー比 0.5〜5 倍程度（先行研究の 500〜5000 GPU / α 10〜100 に相当）。値は case.yaml で人間が確定。
-- **2シナリオ**：(a) 全段同一膜（全 MEMB の permeance を1変数に tie）と (b) 段別独立膜。切替は case.yaml。
+  `α = (k / Q[GPU])^(1/n)`、`permeance_N2 = permeance_CO2 / α`。
+  係数は Robeson 2008 CO2/N2 上界＝先行研究 Lee et al. (2018) Eq.21：
+  **k = 3.0967×10⁸ [GPU]（膜厚 0.1 µm 換算）、n = 2.888**。
+  （旧記載の n ≈ 2.616 は CO2/CH4 の 2.636 との混同で誤り。2026-07-10 修正。）
+- **アンカー**：**真の Robeson 0.1 µm 上界そのもの**（Lee と同一）。単位換算は
+  `1 GPU = 2.70677×10⁻³ m³(STP)/(m²·h·bar)` で確定した——現行膜
+  `permeance_CO2 = 2.70677` は正確に **1000 GPU（MTR Polaris 第1世代、α=50）**であり、
+  換算の曖昧さは無い。現行膜は上界より下（上界上の α(1000GPU)≈80）。
+  「現行膜を通る平行線」案は先行研究の結論（~4000 GPU/α50）と直接比較できないため不採用。
+- **探索範囲**：**[500, 6000] GPU**（Lee の感度範囲 500〜5000 ＋ 段別最適 5986 をカバー。
+  α は 43〜101 に対応）。case.yaml `membrane_model.permeance_bounds_gpu`。
+- **2シナリオ**：(a) 全段同一膜（`tie: true`＝共有変数 `MEMB_perm` 1本、変数リスト先頭固定）と
+  (b) 段別独立膜（`tie: false`＝各 MEMB に `{unit}_perm`）。切替は case.yaml。
   それ自体が ablation（先行研究の結論「同一膜なら ~4000 GPU/α50 が指針」との比較点）。
-- **実装箇所**：unit_registry（MEMB の GA 変数に permeance 追加）、case.yaml `membrane_model:` セクション
-  （n・アンカー・範囲・tie モード）、simulator.set_continuous_variables に
-  permeance → `L("CARBO-01")`/`L("NITRO-01")` 書き込み分岐（インターフェース追加のみ・ロジック不変）。
-- **playbook 変更**：新ユニットの `params` から permeance 直指定を廃止（エージェントの「架空高性能膜の発明」
-  の穴を閉じる）。
+  **run24 は tie: true で開始**（変数増 +1 に抑える）。
+- **実装箇所（済）**：unit_registry（`robeson_alpha`・`permeance_bounds_aspen`・`GPU_TO_ASPEN`）、
+  topology.continuous_variables（membrane_model 引数・tie 変数）、simulator.build_unit_params
+  （`MEMB*` 展開・N2 導出の純関数）、aspen_builder.set_continuous_variables に
+  `L("CARBO-01")`/`L("NITRO-01")` 書き込み分岐（インターフェース追加のみ・ロジック不変）、
+  case.yaml `membrane_model:` セクション。membrane_model セクションを削除すると従来動作。
+- **playbook 変更（未・run24 準備時）**：新ユニットの `params` から permeance 直指定を廃止
+  （エージェントの「架空高性能膜の発明」の穴を閉じる）。`algorithm/CLAUDE.md` 更新で対応。
 
-### 12.2 コスト目的関数（$/tCO2）
+### 12.2 コスト目的関数（$/tCO2）【実装済み 2026-07-10】
 
 目的をエネルギーのみから**年間換算回収コスト**へ変更する。ver2 の実測で、エネルギーのみ目的は
-「膜面積がタダ」なため面積爆発（MEMB1=32万m²）と大循環 basin を招いた。
+「膜面積がタダ」なため面積爆発（MEMB1=32万m²）と大循環 basin を招いた（面積とエネルギーの
+トレードオフが閉じない ill-posed 問題）。
 
-- `F_obj = (年間換算 CAPEX + 年間電力 OPEX) / 年間 CO2 回収量 + ペナルティ`
-  - 膜 CAPEX：単価 ~50 $/m²（モジュール込み）× 資本賦課率（~20%/年）
-  - 電力 OPEX：総 WNET × 電力単価（~0.04 $/kWh）× 年間稼働（~7,446 h）
-  - ペナルティ：既存の純度/回収 shortfall² 形式を維持（CBO は獲得関数に使わず記録用）
-- 経済定数は case.yaml `economics:` セクション（人間管理）。
-- **二相式 CBO との関係**：第1相（不足量最小化）は不変。第2相の目的 outcome を energy→cost に差し替え。
-  Metrics に cost を追加するか evaluator 側で合成するかは実装時に決定（Metrics 拡張が素直）。
-- 比較可能性のため results.json には energy と cost の両方を記録する。
+- `F_obj = (capital_charge · f_in · C_TCC) / (M_CO2 · t_op) + E·Ce + ペナルティ`
+  （Lee et al. 2018 Eq.15/16。`C_TCC = Σ Cm·A + Σ C_unit·|WNET|/η`）
+  - 膜 CAPEX：50 $/m²（モジュール込み）。圧力機器：COMP 670 / VP 1341 / 膨張機 500 $/kW
+    （膨張機は WNET<0 で判別。12.4 実装後に効く）
+  - 資本賦課率 20%/年 × 設置係数 f_in=1.6
+  - 電力 OPEX：E [kWh/tCO2] × 0.04 $/kWh（年間稼働 7,446 h、`M_CO2 = recovery × feed CO2` で正規化）
+  - ペナルティ：既存の純度/回収 shortfall² 形式を維持。係数はコストスケールの
+    `economics.penalty_weight`（Lee の r=1000）。CBO は獲得関数に使わず記録用
+  - **熱交換器（Chx）は省略**（フローシートに冷却器を持たないため。2026-07-10 決定）。
+    **η=0.8 は CAPEX 式にのみ**使い、シミュレーションの圧縮機効率は Aspen Compr 既定のまま（同決定）
+- 経済定数は case.yaml `economics:` セクション（人間管理・Lee Table 1 の値で確定）。
+- **二相式 CBO との関係（済）**：第1相（不足量最小化）は不変。第2相の目的 outcome・best 選択・
+  ロギング fitness を energy→cost に差し替え。実装は Metrics 拡張ではなく
+  **evaluator.cost_per_tco2（純関数）を optimizer 側（ga/bo）で合成**——Metrics・subprocess
+  直列化を変えずに済む。切替は `optimization_targets.objective: minimize_cost`。
+- 比較可能性のため results.json の performance に energy と **`cost_usd_per_tCO2`** の両方を
+  objective 設定に依らず常時記録する（signals にも表示）。
 
-### 12.3 現実的 bounds
+### 12.3 現実的 bounds【実装済み 2026-07-10・人間承認済み】
 
-- `p_permeate` 下限 **0.01 → 0.1 bar**（先行研究の真空ポンプ範囲。0.01 bar=10 mbar は工業的に非現実的で、
-  ver2 の最適解が常に張り付いていた＝エネルギー過大の一因）。UNIT_BOUNDS の変更（人間承認）。
-- `COMP.outlet_pressure` を **1〜4 bar** に（現行 1.1〜20。feed 昇圧の現実的範囲）。
-- 注意：bounds 変更は ver2 の run との数値比較を壊す。ver3 の run シリーズ（run24〜）として別管理。
+- `p_permeate` 下限 **0.01 → 0.1 bar**（先行研究の真空ポンプ範囲 0.1–1 bar。0.01 bar=10 mbar は
+  工業的に非現実的で、ver2 の最適解が常に張り付いていた＝エネルギー過大の一因）。
+- `COMP.outlet_pressure` を **1〜4 bar** に（旧 1.1〜20。feed 昇圧の現実的範囲）。
+- 膜面積は先行研究の段あたり範囲 **[1e5, 1.5e6] m²** をそのまま使い、**feed 流量側を
+  先行研究の 500 Nm³/s 相当（totflow 2,440,000 kg/h）へスケールアップ**して整合させた
+  （2026-07-10 ユーザ決定。コストモデルは線形なので $/tCO2 はスケール不変）。
+  副作用：bounds 比が 15（面積）/ 9.9（p_permeate）となり、12.5(b) の対数スケール化は
+  現行 bounds では発火しない（比 50 超の将来ケースへの保険として残る）。
+- 注意：bounds・feed 変更は ver2 の run との数値比較を壊す。ver3 の run シリーズ（run24〜）として
+  別管理。**流量 3 桁スケールアップの Aspen 収束は run24 前の実機 smoke で要確認**。
 
 ### 12.4 圧力アーキテクチャ（feed 昇圧・圧整合・膨張機）
 
@@ -677,8 +703,8 @@ COMP ユニット型は実装済み（unit_registry→apply_ss→builder→energ
 
 | 項 | 内容 | 要点 |
 |---|---|---|
-| (a) bootstrap 相の best 返却修正 | feasible ゼロ時の返却が旧来の penalty-min のまま。run23 iter_004 で探索が踏んだ shortfall 0.014 の点が埋もれ 0.063 が記録された | min-shortfall の観測を返す（同率は fitness で tie-break）。`bootstrap: off` 連動で旧挙動。~15分 |
-| (b) 対数スケール化 | bounds 比 50 倍超の正の連続変数（area 5000倍・permeance も対象になる）を GP/acqf 内部で log 変換 | 「細い盆地（面積軸の0.6%）が見えない」問題と高カット basin 捕捉（E 5倍）への本命対処。`log_scale_inputs: off` で復帰。~30分 |
+| (a) bootstrap 相の best 返却修正【済 `978fc9e`】 | feasible ゼロ時の返却が旧来の penalty-min のまま。run23 iter_004 で探索が踏んだ shortfall 0.014 の点が埋もれ 0.063 が記録された | min-shortfall の観測を返す（同率は fitness で tie-break）。`bootstrap: off` 連動で旧挙動（YAML 1.1 の bool False も off として吸収） |
+| (b) 対数スケール化【済 `931d892`】 | bounds 比 50 倍超の正の連続変数を GP/acqf/Sobol 内部で log 変換 | 「細い盆地（面積軸の0.6%）が見えない」問題と高カット basin 捕捉（E 5倍）への本命対処。`log_scale_inputs: off` で復帰。**注**: 12.3 の Lee 整合 bounds では比 50 未満のため発火しない（広 bounds への保険として維持） |
 | (c) フェーズ対応 patience | BO の頭打ち後の空転（反復あたり~30分）を適応的に打ち切る | **素朴な連続無改善カウントは棄却済み**（run21 の 66%/50% 改善・run22 の 34% 改善を切り捨てる）。要件：判定軸をフェーズ別（bootstrap=min_shortfall／CEI=feasible cost）・相切替でカウンタリセット・床 n_iter/3・`patience: 0` で無効 |
 
 ### 12.6 検証・比較実験（論文の実験セット・ver3 ケースで実施）
