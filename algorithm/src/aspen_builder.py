@@ -165,7 +165,10 @@ def build_aspen_from_epnt(topology, aspen_file):
         mixer_name = f"MIXV{_num(j)}"
         block_node.Elements.Add(f"{mixer_name}!Mixer")
         aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Input\T_EST").value = 25
-        aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Input\PRES").value  = 1.0
+        # ver3 12.4: PRES=0 ＝「入口ストリームの最小圧に追従」。旧値 1.0（固定）は
+        # feed を昇圧しても膜入口 Mixer で 1 bar に戻し COMP を無効化する罠だった。
+        # 全ストリーム 1 bar の既存構成では結果不変（2026-07-10 実機回帰確認済み）。
+        aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Input\PRES").value  = 0.0
         for s in mixer_inputs[j]:
             aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Ports\F(IN)").Elements.Add(s)
         aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Ports\P(OUT)").Elements.Add(j)
@@ -300,6 +303,8 @@ def _create_and_connect_unit(aspen, block_node, unit_name, arcs,
         _create_membrane(aspen, block_node, unit_name, arcs, params, mixer_vertices, auto_vps)
     elif "compressor" in arc_types:
         _create_compressor(aspen, block_node, unit_name, arcs, params, mixer_vertices)
+    elif "expander" in arc_types:
+        _create_expander(aspen, block_node, unit_name, arcs, params, mixer_vertices)
     elif "heater" in arc_types:
         _create_heater(aspen, block_node, unit_name, arcs, params, mixer_vertices)
     else:
@@ -385,6 +390,26 @@ def _create_compressor(aspen, block_node, unit_name, arcs, params, mixer_vertice
     """Create a Compr block and connect its ports."""
     block_node.Elements.Add(f"{unit_name}!Compr")
     aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\MODEL_TYPE").value = "COMPRESSOR"
+    aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\TYPE").value       = "ISENTROPIC"
+    aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\OPT_SPEC").value   = "PRES"
+    aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\PRES").value = params.get("outlet_pressure", 1.0)
+
+    for i, j, _ in arcs:
+        aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Ports\F(IN)").Elements.Add(i)
+        aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Ports\P(OUT)").Elements.Add(
+            _out_stream(i, j, mixer_vertices)
+        )
+
+
+def _create_expander(aspen, block_node, unit_name, arcs, params, mixer_vertices):
+    """Create a Compr block in TURBINE mode（膨張機・電力回収。ver3 12.4）.
+
+    _create_compressor と同型（MODEL_TYPE のみ TURBINE）。出口圧は params の
+    outlet_pressure（既定 1.0 bar＝大気放出）で、GA 変数は持たない。WNET は負値
+    （回収電力）で energy_breakdown に載り、比エネルギー・コストに算入される。
+    """
+    block_node.Elements.Add(f"{unit_name}!Compr")
+    aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\MODEL_TYPE").value = "TURBINE"
     aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\TYPE").value       = "ISENTROPIC"
     aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\OPT_SPEC").value   = "PRES"
     aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\PRES").value = params.get("outlet_pressure", 1.0)

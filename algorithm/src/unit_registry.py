@@ -88,6 +88,9 @@ UNIT_BOUNDS: dict[str, dict[str, list[float]]] = {
     "COMP": {
         "outlet_pressure": [1.0, 4.0],
     },
+    # 膨張機（ver3 12.4）: GA 変数なし（出口圧は params.outlet_pressure 固定・既定 1 bar）。
+    # 構造部品としてエージェントが高圧経路（昇圧後の残渣等）に配置し電力を回収する。
+    "EXP": {},
 }
 
 # 連続変数の宣言（GA 変数名の組み立てに使う）
@@ -99,6 +102,7 @@ _UNIT_GA_VARS: dict[str, list[dict[str, str]]] = {
     "COMP": [
         {"suffix": "pout", "param": "outlet_pressure"},
     ],
+    "EXP": [],
 }
 
 # 構造テンプレート（add_unit が出力頂点を生成するときに参照）
@@ -106,6 +110,7 @@ _UNIT_GA_VARS: dict[str, list[dict[str, str]]] = {
 STRUCTURE_TEMPLATES: dict[str, dict[str, list[str]]] = {
     "MEMB": {"outlets": ["permeate", "retentate"]},
     "COMP": {"outlets": ["outlet"]},
+    "EXP":  {"outlets": ["outlet"]},
 }
 
 

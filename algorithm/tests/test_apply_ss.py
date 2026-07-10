@@ -137,6 +137,27 @@ class TestAddUnit(unittest.TestCase):
         self.assertEqual(new_ss["units"]["COMP1"]["outlets"], {"outlet": "V9"})
         T.validate(new_ss)
 
+    def test_add_expander_two_arcs_per_port(self):
+        """EXP（膨張機・ver3 12.4）も COMP と同型（内部 expander + 後段 process）。"""
+        ss = load_seed()
+        change = {"operations": [
+            {"op": "add_unit", "unit_type": "EXP", "unit": "EXP1",
+             "inlet": "V3", "outlet_to": "V8",
+             "params": {"outlet_pressure": 1.0}}
+        ]}
+        new_ss = A.apply_change(ss, change)
+        # 旧直結 (V3,V8) residue 削除、新頂点 V9 (outlet) 追加
+        self.assertNotIn(("V3", "V8"), new_ss["arcs"])
+        self.assertIn("V9", new_ss["vertices"])
+        self.assertEqual(new_ss["arcs"][("V3", "V9")],
+                         {"type": "expander", "unit": "EXP1"})
+        self.assertEqual(new_ss["arcs"][("V9", "V8")], {"type": "process"})
+        self.assertEqual(new_ss["units"]["EXP1"]["outlets"], {"outlet": "V9"})
+        # GA 変数は増えない（膨張機は変数なしの構造部品）
+        names = [cv["name"] for cv in T.continuous_variables(new_ss)]
+        self.assertNotIn("EXP1_pout", names)
+        T.validate(new_ss)
+
 
 # =========================================================
 # add_gated_unit（GA トグルとしてのユニット追加）

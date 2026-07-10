@@ -202,11 +202,12 @@ class AspenEvaluator:
             kill_aspen_image()
             return None, None
 
-        # energy_blocks = auto-VP 名 + 明示 COMP ユニット名
+        # energy_blocks = auto-VP 名 + 明示 COMP/EXP ユニット名
+        # （EXP＝膨張機は WNET が負＝回収電力として合計に算入される。ver3 12.4）
         vp_map = _auto_vps(topology)
         energy_blocks: list[str] = list(vp_map.values())
         for uname, udef in topology["units"].items():
-            if udef.get("type") == "COMP" and uname not in energy_blocks:
+            if udef.get("type") in ("COMP", "EXP") and uname not in energy_blocks:
                 energy_blocks.append(uname)
 
         return aspen, energy_blocks

@@ -40,6 +40,7 @@ from unit_registry import STRUCTURE_TEMPLATES, get_outlet_ports  # noqa: E402
 INNER_ARC_TYPE: dict[str, dict[str, str]] = {
     "MEMB": {"permeate": "membrane_permeate", "retentate": "membrane_retentate"},
     "COMP": {"outlet": "compressor"},
+    "EXP":  {"outlet": "expander"},   # 膨張機（ver3 12.4）
 }
 
 
