@@ -25,7 +25,7 @@ argument-hint: <run dir, 例: runs/run24> [最大反復数] [--dry]
 
 0. **新規 run のブートストラップ**：`RUN/ss_current.json` が無ければ、`ss_seed.json` の内容をそのまま Write ツールで `RUN/ss_current.json` にコピーし、`uv run python -u src/run_iteration.py --base-dir RUN > RUN/iter_001_log.txt 2>&1` でベースライン（iter_001・ss_change なし）を取ってから 1 へ。
 1. `RUN/iterations/` で `results.json` を持つ最大番号の `iter_MMM/` を最新とする（番号を M とする）。その `results.json` を読む。
-2. `iter_MMM/ss_change.json` が**既に存在すれば**（手書き or `/sst-analyze` で用意済み）それを使う。**無ければ**シグナルを抽出して「削除＋追加のセット」の `ss_change.json` を `iter_MMM/` に書く（数値を `reason` に引用、リサイクルは戻す残渣の CO₂ を確認、変数上限＝`case.yaml` の `max_variables`/`max_binary_variables` を自己点検）。
+2. `iter_MMM/ss_change.json` が**既に存在すれば**（手書き or `/sst-analyze` で用意済み）それを使う。**無ければ**シグナルを抽出して「削除＋追加のセット」の `ss_change.json` を `iter_MMM/` に書く（数値を `reason` に引用、リサイクルは戻す残渣の CO₂ を確認、バイナリ上限＝`case.yaml` の `max_binary_variables` を自己点検）。
 3. `uv run python src/apply_ss.py --base-dir RUN --iter M`
 4. `uv run python -u src/run_iteration.py --base-dir RUN > RUN/iter_(M+1)_log.txt 2>&1`（run_iteration が次番号を max+1 で自動採番）。**`--dry` 指定時は optimizer に応じた縮小フラグ＋`--no-commit` を付けて実行**（BO: `--bo-n-init 4 --bo-n-iter 3 --bo-q-batch 2`、GA: `--pop 4 --gen 3`）。
 5. 生成された新しい `results.json` を読み、**簡潔に報告**：読んだシグナル（数値）／書いた ss_change と根拠／新 results の純度・回収率・比エネルギー。

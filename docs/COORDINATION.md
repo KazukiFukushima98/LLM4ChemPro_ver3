@@ -36,7 +36,11 @@ ver2（完成・`v2.0-complete`）の追跡ツリーを継承して本リポジ�
 3. **run24 前の Aspen 実機 smoke**（下記の検証項目を一括確認）
 4. **run24 準備**：`algorithm/CLAUDE.md` playbook 更新（新ユニット params の permeance
    直指定廃止・改善判定軸を cost に・membrane_model/economics の説明）→ run24 開始
-   （membrane_model.tie: true で）→ **12.6 ablation**
+   （membrane_model.tie: **false**＝段別独立。2026-07-10 ユーザ決定）→ **12.6 ablation**
+
+（済 2026-07-10 追加決定：SST の変数上限を**バイナリのみ**（max_binary_variables=8）に変更、
+旧 max_variables=20 は撤廃。tie: false へ切替（seed の変数は連続6＝面積2・p_perm2・perm2）。
+CLAUDE.md/sst-loop.md の自己点検ルールも更新済み。）
 
 （済 `7b2d305`：ss_seed の膜 area を 500000 m² に更新（ユーザ指示）。reference/（参照論文
 PDF）を gitignore 化。）
