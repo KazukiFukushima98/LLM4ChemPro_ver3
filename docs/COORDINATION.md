@@ -5,16 +5,25 @@
 
 ---
 
-## 直近の状態（2026-07-10 時点）— ver3 立ち上げ完了・実装フェーズ開始待ち
+## 直近の状態（2026-07-10 時点）— 12.5(a)(b) 実装済み・(c) から再開
 
-ver2（完成・`v2.0-complete`）の追跡ツリーを継承して本リポジトリを作成。テスト 182 件緑を確認済み。
+ver2（完成・`v2.0-complete`）の追跡ツリーを継承して本リポジトリを作成。
 **ver3 のスコープと実装順は `ARCHITECTURE.md` 12節が正本**（このファイルには進捗と未決だけを書く）。
+
+**12.5(a)(b) 実装済み（2026-07-10、テスト 191 件緑）**：
+- (a) `978fc9e`：全 infeasible 終了時の best 返却を min-shortfall（同率 fitness tie-break）に。
+  `bootstrap: off` で旧 penalty-min。あわせて YAML 1.1 が `off` を bool False にパースして
+  ロールバック口が効かない潜在バグを `_is_off` で吸収（`bo:` の全フラグ共通）。
+- (b) `931d892`：bounds 比 50 倍超の正の連続変数を GP/acqf/Sobol 内部で log 変換
+  （`log_scale_inputs`、既定 on）。現行 bounds では area（比5000）に加え p_permeate（比99）も
+  対象になる点に注意（12.3 で下限 0.1 になると p_permeate は比9.9で対象外に戻る）。
+  `bo: log_scale_inputs: off` で線形復帰。
 
 ### 実装キュー（ARCHITECTURE 12節の要約・推奨順）
 
 1. **12.5 アルゴリズム持ち越し**（bo.py・run24 の前に）：
-   (a) bootstrap 相の best 返却を min-shortfall に修正（~15分）
-   (b) 対数スケール化 `log_scale_inputs`（~30分）
+   ~~(a) bootstrap 相の best 返却を min-shortfall に修正~~ 済
+   ~~(b) 対数スケール化 `log_scale_inputs`~~ 済
    (c) フェーズ対応 patience（素朴な連続無改善カウントは棄却済み・要件は 12.5 の表）
 2. **12.1 Robeson 膜モデル**（permeance 変数化・α 導出・同一膜/段別の2シナリオ）
 3. **12.2 コスト目的関数**（$/tCO2。economics: セクションは人間承認）
