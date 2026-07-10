@@ -97,6 +97,14 @@ _BO_DEFAULTS: dict[str, Any] = {
     # 一時的 wedge（実測15-20%）が purity=0/recovery=0 の偽 infeasible として
     # GP を汚染するのを防ぐ。リトライしても bad ＝ 真の非収束として学習される。
     "retry_bad": 1,
+    # フェーズ対応 patience（12.5(c)）。頭打ち後の空転（反復あたり~30分）を適応的に
+    # 打ち切る。素朴な連続無改善カウントは棄却済み（run21 の 66%/50% 改善・run22 の
+    # 34% 改善を切り捨てた）ため、次の3点で誤打ち切りを防ぐ：
+    #   (1) 判定軸をフェーズ別にする（bootstrap=min_shortfall / CEI=feasible objective）
+    #   (2) 相切替（bootstrap→CEI）でカウンタをリセットする
+    #   (3) 床 n_iter/3 反復までは打ち切らない
+    # 0 で無効（常に n_iter まで回る）。
+    "patience": 10,
     # 連続変数の対数スケール化（12.5(b)）。bounds 比が _LOG_SCALE_RATIO 倍を超える
     # 正の連続変数を GP/acqf/Sobol の内部表現で log 変換する。"off" で線形固定。
     # 注: 12.3 の Lee 整合 bounds では全変数が比 50 未満のため対象ゼロ＝実質不発火
@@ -106,6 +114,41 @@ _BO_DEFAULTS: dict[str, Any] = {
 
 # log 変換対象の bounds 比しきい値（12.5(b)：「bounds 比 50 倍超の正の連続変数」）
 _LOG_SCALE_RATIO = 50.0
+
+
+class _PhasePatience:
+    """フェーズ対応 patience（12.5(c)）の状態機械（純ロジック・テスト可能）。
+
+    各反復の終わりに update(phase, axis, it) を呼ぶ。axis は「小さいほど良い」
+    フェーズ別の判定値（bootstrap=min_shortfall / cei=feasible objective の最小）。
+    True が返ったら打ち切り。ルール:
+      - 相が切り替わったらカウンタと基準値をリセット（切替直後に打ち切らない）
+      - axis が改善（strict に減少）したらカウンタリセット
+      - 無改善が patience 回連続し、かつ完了反復数が floor_iters 以上なら打ち切り
+      - patience <= 0 なら常に False（無効）
+    """
+
+    def __init__(self, patience: int, floor_iters: int) -> None:
+        self.patience = int(patience)
+        self.floor_iters = int(floor_iters)
+        self._phase: str | None = None
+        self._best: float = float("inf")
+        self._count: int = 0
+
+    def update(self, phase: str, axis: float, it: int) -> bool:
+        if self.patience <= 0:
+            return False
+        if phase != self._phase:
+            self._phase = phase
+            self._best = float(axis)
+            self._count = 0
+            return False
+        if axis < self._best - 1e-12:
+            self._best = float(axis)
+            self._count = 0
+        else:
+            self._count += 1
+        return self._count >= self.patience and (it + 1) >= self.floor_iters
 
 
 def _is_off(value: Any) -> bool:
@@ -367,7 +410,8 @@ def run_bo(
                その中の energy 最小。全 infeasible なら min-shortfall の観測
                （同率は penalty 込み fitness で tie-break）。bootstrap: off のときのみ
                旧来の penalty 込み fitness 最小
-    gen_log  : [{"gen": i, "best_fitness": f}, ...] (長さ n_iter)
+    gen_log  : [{"gen": i, "best_fitness": f, "phase": ...}, ...]（長さ ≤ n_iter。
+               patience 打ち切り時は短くなり、最終要素に "early_stop" キーが付く）
                best_fitness は penalty 込み値で、SST signals 互換のため
     n_evals  : 総評価回数
     """
@@ -404,6 +448,9 @@ def run_bo(
     bootstrap_on = not _is_off(bo_cfg.get("bootstrap", "shortfall"))
     retry_bad    = int(bo_cfg.get("retry_bad", 1))
     log_scale_on = not _is_off(bo_cfg.get("log_scale_inputs", "on"))
+    patience     = int(bo_cfg.get("patience", 10))
+    # 床: n_iter/3 反復までは打ち切らない（12.5(c)。序盤の停滞での早期打ち切り防止）
+    tracker = _PhasePatience(patience, floor_iters=max(1, n_iter // 3))
 
     device = _select_device()
     dtype  = torch.double
@@ -431,6 +478,8 @@ def run_bo(
           f"bootstrap={'shortfall' if bootstrap_on else 'off'}, retry_bad={retry_bad}, "
           f"log_scale={log_scaled_names if log_scaled_names else 'off'}, "
           f"objective={'cost($/tCO2)' if cost_mode else 'energy(kWh/tCO2)'}, "
+          f"patience={patience if patience > 0 else 'off'}"
+          f"(floor={max(1, n_iter // 3)}), "
           f"constraints: purity≥{purity_min}, recovery≥{recovery_min}")
 
     # ----- 1. Sobol 初期サンプル -----
@@ -568,6 +617,26 @@ def run_bo(
             ).min())
             print(f"  Iter {it+1:2d} [{phase}]: best_fit={best_fit_log:.1f}  "
                   f"(no feasible yet, min_shortfall={min_short:.3f})")
+
+        # ---- フェーズ対応 patience（12.5(c)）----
+        # 新観測を取り込んだ後の状態でフェーズと判定軸を確定する
+        # （bootstrap=min_shortfall / cei=feasible objective 最小。相切替でリセット）。
+        feas_now = (all_p_raw >= purity_min) & (all_r_raw >= recovery_min) & all_v
+        if feas_now.any():
+            phase_now = "cei"
+            axis = float(np.where(feas_now, all_o_raw, np.inf).min())
+        else:
+            phase_now = "bootstrap"
+            axis = float((
+                np.maximum(0.0, purity_min   - all_p_raw)
+                + np.maximum(0.0, recovery_min - all_r_raw)
+            ).min())
+        if tracker.update(phase_now, axis, it):
+            gen_log[-1]["early_stop"] = f"patience={patience} ({phase_now})"
+            print(f"  [CBO] early stop at iter {it+1}/{n_iter}: "
+                  f"{phase_now} 軸で {patience} 反復連続無改善"
+                  f"（床 {max(1, n_iter // 3)} 反復は消化済み）")
+            break
 
     # ----- 5. best 個体を選んで DEAP Individual 互換 list で返す -----
     # CBO は constraint satisfaction を優先する設計なので、feasible 観測があれば

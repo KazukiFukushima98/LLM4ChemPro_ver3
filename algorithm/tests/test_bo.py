@@ -358,6 +358,76 @@ class TestMembraneModelIntegration(unittest.TestCase):
         self.assertEqual(len(best), 6)
 
 
+class TestPhasePatience(unittest.TestCase):
+    """12.5(c) _PhasePatience の状態機械（純ロジック）。"""
+
+    def test_patience_zero_is_disabled(self) -> None:
+        import bo as bo_mod
+        p = bo_mod._PhasePatience(0, floor_iters=1)
+        for it in range(50):
+            self.assertFalse(p.update("cei", 1.0, it))
+
+    def test_counts_stall_but_respects_floor(self) -> None:
+        import bo as bo_mod
+        p = bo_mod._PhasePatience(2, floor_iters=5)
+        self.assertFalse(p.update("cei", 1.0, 0))   # 相確立（リセット）
+        self.assertFalse(p.update("cei", 1.0, 1))   # count=1
+        self.assertFalse(p.update("cei", 1.0, 2))   # count=2 だが床未達（3<5）
+        self.assertFalse(p.update("cei", 1.0, 3))   # count=3 だが床未達（4<5）
+        self.assertTrue(p.update("cei", 1.0, 4))    # count=4・床到達（5>=5）→ 打ち切り
+
+    def test_improvement_resets_counter(self) -> None:
+        import bo as bo_mod
+        p = bo_mod._PhasePatience(2, floor_iters=1)
+        self.assertFalse(p.update("cei", 10.0, 0))
+        self.assertFalse(p.update("cei", 10.0, 1))  # count=1
+        self.assertFalse(p.update("cei", 9.0, 2))   # 改善 → リセット
+        self.assertFalse(p.update("cei", 9.0, 3))   # count=1
+        self.assertTrue(p.update("cei", 9.0, 4))    # count=2 → 打ち切り
+
+    def test_phase_switch_resets_counter(self) -> None:
+        import bo as bo_mod
+        p = bo_mod._PhasePatience(2, floor_iters=1)
+        self.assertFalse(p.update("bootstrap", 0.5, 0))
+        self.assertFalse(p.update("bootstrap", 0.5, 1))  # count=1
+        self.assertFalse(p.update("cei", 300.0, 2))      # 相切替 → リセット（軸も別物）
+        self.assertFalse(p.update("cei", 300.0, 3))      # count=1
+        self.assertTrue(p.update("cei", 300.0, 4))       # count=2 → 打ち切り
+
+
+class TestPatienceIntegration(unittest.TestCase):
+    """12.5(c) run_bo での早期打ち切り（床 n_iter/3・gen_log への記録）。"""
+
+    class _ConstantFeasibleMock:
+        """全点同一の feasible 観測（改善が絶対に起きない地形）。"""
+
+        def evaluate_topology(self, topology, x_list):
+            return [Metrics(specific_energy=300.0, purity=0.96, recovery=0.92)
+                    for _ in x_list]
+
+        def evaluate_detailed(self, topology, x):
+            return DetailedResult(metrics=self.evaluate_topology(topology, [x])[0])
+
+    def test_early_stop_after_floor(self) -> None:
+        from bo import run_bo
+        ss = _load_seed()
+        case = _make_case({"n_iter": 12, "patience": 2})
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, _ = run_bo(ss, case, self._ConstantFeasibleMock(), seed=71)
+        # 床 = 12//3 = 4。count が 2 に達しても床までは回り、床到達で打ち切り
+        self.assertEqual(len(gen_log), 4, f"床+patience で 4 反復のはず: {len(gen_log)}")
+        self.assertIn("early_stop", gen_log[-1])
+
+    def test_patience_off_runs_full(self) -> None:
+        from bo import run_bo
+        ss = _load_seed()
+        case = _make_case({"n_iter": 3, "patience": 0})
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, _ = run_bo(ss, case, self._ConstantFeasibleMock(), seed=72)
+        self.assertEqual(len(gen_log), 3)
+        self.assertNotIn("early_stop", gen_log[-1])
+
+
 class TestCostObjective(unittest.TestCase):
     """12.2: objective=minimize_cost で BO の目的・best 選択がコスト軸になる。"""
 
