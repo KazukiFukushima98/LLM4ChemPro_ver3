@@ -36,7 +36,12 @@ from typing import Any
 
 # 同ディレクトリの unit_registry を import するためパスを足す
 sys.path.insert(0, dirname(__file__))
-from unit_registry import make_ga_variables  # noqa: E402
+from unit_registry import (  # noqa: E402
+    get_unit_type,
+    is_tie_mode,
+    make_ga_variables,
+    permeance_bounds_aspen,
+)
 
 
 SinkRoles = frozenset({"product", "residue"})
@@ -717,17 +722,37 @@ def binary_variables(ss: dict[str, Any]) -> list[dict[str, Any]]:
     return [seen[q] for q in sorted(seen, key=_qid_num)]
 
 
-def continuous_variables(ss: dict[str, Any]) -> list[dict[str, Any]]:
+def continuous_variables(
+    ss: dict[str, Any],
+    membrane_model: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """SS テンプレートの units から連続変数リストを導出。
 
     並び:
         - 外側は units の挿入順
         - 各ユニット内は unit_registry の宣言順
+        - membrane_model（12.1）が tie モードのときは共有 permeance 変数
+          `MEMB_perm`（unit_param=["MEMB*", "permeance_CO2"]）を**先頭**に置く。
+          先頭固定なのは、pruning 後トポロジーとの位置整列（x_for_topology）を
+          膜の生存パターンに依らず保つため。段別（tie=False）は各 MEMB の変数列に
+          `{unit}_perm` が付く（unit_registry.make_ga_variables）。
     各ユニットの bounds_override は make_ga_variables 内で UNIT_BOUNDS より優先される。
+    membrane_model=None は従来どおり（permeance は params の固定値）。
     """
     result: list[dict[str, Any]] = []
-    for uname, udef in ss.get("units", {}).items():
-        result.extend(make_ga_variables(uname, udef))
+    units = ss.get("units", {})
+    if (
+        membrane_model is not None
+        and is_tie_mode(membrane_model)
+        and any(get_unit_type(u) == "MEMB" for u in units)
+    ):
+        result.append({
+            "name":       "MEMB_perm",
+            "unit_param": ["MEMB*", "permeance_CO2"],
+            "bounds":     permeance_bounds_aspen(membrane_model),
+        })
+    for uname, udef in units.items():
+        result.extend(make_ga_variables(uname, udef, membrane_model=membrane_model))
     return result
 
 

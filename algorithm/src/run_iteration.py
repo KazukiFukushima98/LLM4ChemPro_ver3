@@ -87,14 +87,16 @@ def build_results_dict(
     n_evals: int,
     optimizer: str = "ga",
     seed: int | None = None,
+    membrane_model: dict | None = None,
 ) -> dict:
     """ARCH 3.7 の results.json スキーマに沿った辞書を組み立てる。
 
     optimizer / seed は再現性のための記録（どの最適化器がどの乱数で出した結果か。
     seed=iter番号はディレクトリ状態に依存してドリフトし得るため、値そのものを残す）。
+    membrane_model（12.1）は permeance 変数の命名・次元を GA/BO 側と揃えるために必要。
     """
     bin_vars  = binary_variables(ss)
-    cont_vars = continuous_variables(ss)
+    cont_vars = continuous_variables(ss, membrane_model)
     n_binary  = len(bin_vars)
 
     q_active: dict[str, int] = {bv["name"]: int(best[k] > 0.5) for k, bv in enumerate(bin_vars)}
@@ -308,7 +310,7 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
     T.save_ss(ss, os.path.join(iter_dir, "ss_snapshot.json"))
 
     bin_vars  = binary_variables(ss)
-    cont_vars = continuous_variables(ss)
+    cont_vars = continuous_variables(ss, case.get("membrane_model"))
     print(f"\n[1] SS: {len(ss['vertices'])} vertices, units={list(ss['units'])}")
     print(f"    binary={[bv['name'] for bv in bin_vars]}")
     print(f"    continuous={[cv['name'] for cv in cont_vars]}")
@@ -357,6 +359,7 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
     results = build_results_dict(
         iter_num, best, ss, detailed, gen_log, n_evals,
         optimizer=optimizer, seed=iter_num,
+        membrane_model=case.get("membrane_model"),
     )
     results_path = os.path.join(iter_dir, "results.json")
     tmp_path = results_path + ".tmp"

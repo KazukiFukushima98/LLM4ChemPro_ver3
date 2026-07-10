@@ -89,14 +89,17 @@ class Signals:
 # 抽出（単独）
 # =========================================================
 
-def extract_bounds_hit(results: dict, ss: dict) -> list[BoundsHit]:
+def extract_bounds_hit(
+    results: dict, ss: dict, membrane_model: dict | None = None
+) -> list[BoundsHit]:
     """連続変数の境界張り付きを検出する。閾値 BOUNDS_HIT_SLACK。
 
     bounds は continuous_variables(ss) を通すので bounds_override も自動反映される。
+    membrane_model（12.1）を渡すと permeance 変数の張り付きも検出対象になる。
     """
     opt_params: dict[str, Any] = results.get("optimal_params", {}) or {}
     hits: list[BoundsHit] = []
-    for cv in continuous_variables(ss):
+    for cv in continuous_variables(ss, membrane_model):
         name = cv["name"]
         if name not in opt_params:
             continue
@@ -196,7 +199,7 @@ def extract(results: dict, ss: dict, case: dict) -> Signals:
     return Signals(
         iteration=int(results.get("iteration", 0)),
         specific_energy=float(results.get("performance", {}).get("specific_energy_kWh_tCO2", 0.0)),
-        bounds_hit=extract_bounds_hit(results, ss),
+        bounds_hit=extract_bounds_hit(results, ss, case.get("membrane_model")),
         energy_blocks=extract_energy_blocks(results),
         residue_losses=extract_residue_losses(results, ss),
         constraint_violation=extract_constraint_violation(results, case),

@@ -211,6 +211,20 @@ def set_continuous_variables(aspen, unit_params):
             )
             if node is not None:
                 node.value = params["p_permeate"]
+        # ver3 12.1（Robeson 膜モデル）: permeance を GA 変数として書き込む分岐。
+        # ノードパスは _create_membrane の初期設定と同一（インターフェース追加のみ）。
+        if "permeance_CO2" in params:
+            node = aspen.Tree.FindNode(
+                rf'\Data\Blocks\{unit_name}\Data\{unit_name}.L\{unit_name}.L("CARBO-01")\VALUE'
+            )
+            if node is not None:
+                node.value = params["permeance_CO2"]
+        if "permeance_N2" in params:
+            node = aspen.Tree.FindNode(
+                rf'\Data\Blocks\{unit_name}\Data\{unit_name}.L\{unit_name}.L("NITRO-01")\VALUE'
+            )
+            if node is not None:
+                node.value = params["permeance_N2"]
         if "outlet_pressure" in params:
             node = aspen.Tree.FindNode(
                 rf"\Data\Blocks\{unit_name}\Input\PRES"

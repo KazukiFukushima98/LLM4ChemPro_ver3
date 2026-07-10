@@ -28,6 +28,21 @@ penalty_weight: 100000.0  # PENALTY_W. Quadratic penalty on purity/recovery shor
 
 vp_outlet_pressure: 1.0   # bar. Auto-VP discharge pressure on each membrane permeate (fixed).
 
+# ver3 12.1: Robeson 膜モデル。膜物性（permeance_CO2）を段別固定値から GA/BO の
+# 連続変数に格上げし、選択率は Robeson 2008 CO2/N2 上界（0.1µm 膜厚換算、
+# Lee et al. 2018 Eq.21: Q[GPU] = k·α^(−n)）で導出する。
+# このセクションを削除すると従来どおり（permeance は units.params の固定値）。
+membrane_model:
+  tie: true                        # 全段同一膜（permeance 1変数を全 MEMB で共有）。
+                                   # false で段別独立（MEMB ごとに +1 変数）。
+                                   # tie ⇄ 段別の比較自体が 12.1 の ablation。
+  robeson_n: 2.888                 # 上界の傾き（Robeson 2008 CO2/N2）
+  robeson_k_gpu: 3.0967e+8         # 上界の前係数 [GPU]（膜厚 0.1µm 換算）
+  gpu_to_aspen: 2.70677e-3         # 1 GPU → Aspen 単位 [m3(STP)/(m2·h·bar)]。
+                                   # 現行膜 permeance_CO2=2.70677 ≡ 1000 GPU（Polaris 第1世代）
+  permeance_bounds_gpu: [500.0, 6000.0]   # 探索範囲 [GPU]。Lee の感度範囲 500-5000 ＋
+                                          # 段別最適 5986 GPU をカバー（α は 43〜101 に対応）
+
 # Aspen タイムアウト。整数 [秒]。
 # evaluate_topology は GA ループで多数回回るので短め、evaluate_detailed は best 1点だけなので緩め。
 # 段数を増やす遷移で詰まり始めたら個別に伸ばす（COORDINATION フェーズ4(2) 対応）。

@@ -20,10 +20,46 @@ import aspen_watchdog  # noqa: E402
 from aspen_builder import build_aspen_from_epnt, kill_aspen_image, set_continuous_variables  # noqa: E402
 from evaluator import BAD_VALUE, DetailedResult, Metrics                   # noqa: E402
 from topology import auto_vps as _auto_vps, continuous_variables            # noqa: E402
+from unit_registry import robeson_alpha                                     # noqa: E402
 
 
 class AspenCrashError(RuntimeError):
     """Raised when Aspen crashes (detected via new .dmp file in dmp_dir)."""
+
+
+def build_unit_params(
+    x: list[float],
+    cont_vars: list[dict],
+    topology: dict,
+    membrane_model: dict | None = None,
+) -> dict[str, dict[str, float]]:
+    """x（具体トポロジー次元）から set_continuous_variables 用の unit_params を組み立てる。
+
+    - unit 名が "*" で終わるエントリ（tie 共有 permeance の "MEMB*"）は、その
+      プレフィクスを持つトポロジー内の全ユニットへ同じ値を展開する
+    - membrane_model（12.1）が与えられていれば、permeance_CO2 を持つユニットに
+      Robeson 上界から permeance_N2 = permeance_CO2 / α を導出して追加する
+
+    Aspen 非依存の純関数（COM を触らないので単体テスト可能）。
+    """
+    unit_params: dict[str, dict[str, float]] = {}
+    for val, cv in zip(x, cont_vars):
+        uname, param = cv["unit_param"]
+        if uname.endswith("*"):
+            prefix = uname[:-1]
+            targets = [u for u in topology.get("units", {}) if u.startswith(prefix)]
+        else:
+            targets = [uname]
+        for u in targets:
+            unit_params.setdefault(u, {})[param] = float(val)
+
+    if membrane_model is not None:
+        for params in unit_params.values():
+            if "permeance_CO2" in params:
+                alpha = robeson_alpha(params["permeance_CO2"], membrane_model)
+                params["permeance_N2"] = params["permeance_CO2"] / alpha
+
+    return unit_params
 
 
 MAX_REBUILDS_PER_GROUP = 3  # 1グループ内で許す再ビルド回数の上限（無限ループ防止）
@@ -260,7 +296,8 @@ class AspenEvaluator:
             すべての結果確定は emit() を経由するので、append/extend を直接書かないこと。
         """
         with aspen_watchdog.armed():
-            cont_vars   = continuous_variables(topology)
+            membrane_model = self._case.get("membrane_model")
+            cont_vars   = continuous_variables(topology, membrane_model)
             product_vid = self._product_vid(topology)
             results: list[Metrics] = []
 
@@ -289,10 +326,7 @@ class AspenEvaluator:
 
             for x in x_list:
                 try:
-                    unit_params: dict = {}
-                    for val, cv in zip(x, cont_vars):
-                        uname, param = cv["unit_param"]
-                        unit_params.setdefault(uname, {})[param] = val
+                    unit_params = build_unit_params(x, cont_vars, topology, membrane_model)
                     set_continuous_variables(aspen, unit_params)
                     run_aspen_with_timeout(aspen, timeout=timeout_eval, dmp_dir=self._dmp_dir)
                     emit(self._extract_metrics(aspen, product_vid, energy_blocks))
@@ -335,7 +369,8 @@ class AspenEvaluator:
         ビルド・実行失敗時は DetailedResult(metrics=Metrics.bad()) を返す。
         """
         with aspen_watchdog.armed():
-            cont_vars   = continuous_variables(topology)
+            membrane_model = self._case.get("membrane_model")
+            cont_vars   = continuous_variables(topology, membrane_model)
             product_vid = self._product_vid(topology)
             if product_vid is None:
                 return DetailedResult(metrics=Metrics.bad())
@@ -346,10 +381,7 @@ class AspenEvaluator:
 
             timeout_detail = int(self._case.get("aspen_timeout_detail", 120))
             try:
-                unit_params: dict = {}
-                for val, cv in zip(x, cont_vars):
-                    uname, param = cv["unit_param"]
-                    unit_params.setdefault(uname, {})[param] = val
+                unit_params = build_unit_params(x, cont_vars, topology, membrane_model)
                 set_continuous_variables(aspen, unit_params)   # ← try の中（COM 書き込みハングも捕捉）
                 run_aspen_with_timeout(aspen, timeout=timeout_detail, dmp_dir=self._dmp_dir)
             except Exception as e:

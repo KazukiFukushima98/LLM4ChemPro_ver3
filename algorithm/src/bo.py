@@ -347,7 +347,7 @@ def run_bo(
     n_evals  : 総評価回数
     """
     bin_vars  = binary_variables(ss)
-    cont_vars = continuous_variables(ss)
+    cont_vars = continuous_variables(ss, case.get("membrane_model"))
     n_bin     = len(bin_vars)
     n_cont    = len(cont_vars)
     d         = n_bin + n_cont

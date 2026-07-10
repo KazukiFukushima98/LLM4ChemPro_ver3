@@ -24,10 +24,11 @@ sys.path.insert(0, SRC)
 from evaluator import BAD_VALUE, Metrics  # noqa: E402
 
 try:
-    from simulator import AspenEvaluator  # noqa: E402
+    from simulator import AspenEvaluator, build_unit_params  # noqa: E402
     _SIM_IMPORT_ERR = None
 except Exception as e:  # pragma: no cover - pywin32 不在環境
     AspenEvaluator = None
+    build_unit_params = None
     _SIM_IMPORT_ERR = e
 
 
@@ -146,6 +147,75 @@ class TestEnergyGuard(unittest.TestCase):
         m = self._extract(wnet=0.0, energy_blocks=[])
         self.assertFalse(_is_bad(m), f"blocks なしの 0 エネルギーが誤って BAD: {m}")
         self.assertEqual(m.specific_energy, 0.0)
+
+
+@unittest.skipUnless(
+    build_unit_params is not None,
+    f"simulator import 不可（pywin32 不在等）: {_SIM_IMPORT_ERR}",
+)
+class TestBuildUnitParams(unittest.TestCase):
+    """x → unit_params の組み立て（12.1: tie 展開と Robeson N2 導出）。Aspen 不要の純関数。"""
+
+    _TOPO2 = {"units": {"MEMB1": {}, "MEMB2": {}}}
+
+    def test_plain_mapping_without_membrane_model(self):
+        cont_vars = [
+            {"name": "MEMB1_area",   "unit_param": ["MEMB1", "area"]},
+            {"name": "MEMB1_p_perm", "unit_param": ["MEMB1", "p_permeate"]},
+        ]
+        up = build_unit_params([20000.0, 0.2], cont_vars, self._TOPO2)
+        self.assertEqual(up, {"MEMB1": {"area": 20000.0, "p_permeate": 0.2}})
+
+    def test_tie_variable_expands_to_all_membranes_with_n2(self):
+        """"MEMB*" の共有 permeance が全 MEMB に展開され、N2 が Robeson で導出される。"""
+        from unit_registry import robeson_alpha
+        cont_vars = [
+            {"name": "MEMB_perm",  "unit_param": ["MEMB*", "permeance_CO2"]},
+            {"name": "MEMB1_area", "unit_param": ["MEMB1", "area"]},
+            {"name": "MEMB2_area", "unit_param": ["MEMB2", "area"]},
+        ]
+        p = 10.82708  # ≒ 4000 GPU
+        up = build_unit_params([p, 500000.0, 300000.0], cont_vars, self._TOPO2,
+                               membrane_model={})
+        alpha = robeson_alpha(p, {})
+        for u in ("MEMB1", "MEMB2"):
+            self.assertAlmostEqual(up[u]["permeance_CO2"], p)
+            self.assertAlmostEqual(up[u]["permeance_N2"], p / alpha, places=9)
+        self.assertAlmostEqual(up["MEMB1"]["area"], 500000.0)
+        self.assertAlmostEqual(up["MEMB2"]["area"], 300000.0)
+
+    def test_tie_expands_only_to_surviving_membranes(self):
+        """pruned topology では残存 MEMB だけに展開される。"""
+        cont_vars = [
+            {"name": "MEMB_perm",  "unit_param": ["MEMB*", "permeance_CO2"]},
+            {"name": "MEMB1_area", "unit_param": ["MEMB1", "area"]},
+        ]
+        topo = {"units": {"MEMB1": {}}}
+        up = build_unit_params([5.0, 200000.0], cont_vars, topo, membrane_model={})
+        self.assertEqual(set(up), {"MEMB1"})
+        self.assertIn("permeance_N2", up["MEMB1"])
+
+    def test_per_unit_permeance_gets_n2(self):
+        """段別独立（tie=False）の {unit}_perm でも N2 が導出される。"""
+        cont_vars = [
+            {"name": "MEMB1_perm", "unit_param": ["MEMB1", "permeance_CO2"]},
+            {"name": "MEMB2_perm", "unit_param": ["MEMB2", "permeance_CO2"]},
+        ]
+        up = build_unit_params([2.70677, 13.53385], cont_vars, self._TOPO2,
+                               membrane_model={"tie": False})
+        # 1000 GPU の上界 α ≈ 79.6、5000 GPU の上界 α ≈ 45.6 → N2 = CO2/α
+        self.assertLess(up["MEMB1"]["permeance_N2"], up["MEMB1"]["permeance_CO2"])
+        self.assertLess(up["MEMB2"]["permeance_N2"], up["MEMB2"]["permeance_CO2"])
+        # 高透過側ほど α が下がる（N2/CO2 比が大きい）
+        ratio1 = up["MEMB1"]["permeance_N2"] / up["MEMB1"]["permeance_CO2"]
+        ratio2 = up["MEMB2"]["permeance_N2"] / up["MEMB2"]["permeance_CO2"]
+        self.assertLess(ratio1, ratio2)
+
+    def test_no_n2_injection_without_membrane_model(self):
+        """membrane_model=None なら permeance_CO2 をそのまま書くだけ（従来互換）。"""
+        cont_vars = [{"name": "MEMB1_perm", "unit_param": ["MEMB1", "permeance_CO2"]}]
+        up = build_unit_params([2.70677], cont_vars, self._TOPO2, membrane_model=None)
+        self.assertNotIn("permeance_N2", up["MEMB1"])
 
 
 if __name__ == "__main__":

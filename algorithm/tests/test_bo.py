@@ -331,6 +331,33 @@ class TestRunBO(unittest.TestCase):
         self.assertEqual(len(best), len(bin_vars) + len(cont_vars))
 
 
+class TestMembraneModelIntegration(unittest.TestCase):
+    """12.1: membrane_model 有効時に permeance 変数が BO の探索次元に入り完走する。"""
+
+    def test_tie_mode_adds_one_shared_dimension(self) -> None:
+        from bo import run_bo
+        ss = _load_seed()
+        case = _make_case()
+        case["membrane_model"] = {"tie": True}
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, _ = run_bo(ss, case, _SmoothMock(), seed=51)
+        # seed は連続4変数 + 共有 MEMB_perm = 5 次元
+        self.assertEqual(len(best), 5)
+        lo, hi = T.continuous_variables(ss, {"tie": True})[0]["bounds"]
+        self.assertGreaterEqual(best[0], lo - 1e-9)  # 先頭が MEMB_perm
+        self.assertLessEqual(best[0], hi + 1e-9)
+
+    def test_untied_mode_adds_per_membrane_dimension(self) -> None:
+        from bo import run_bo
+        ss = _load_seed()
+        case = _make_case()
+        case["membrane_model"] = {"tie": False}
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, _ = run_bo(ss, case, _SmoothMock(), seed=52)
+        # 連続4変数 + MEMB1_perm + MEMB2_perm = 6 次元
+        self.assertEqual(len(best), 6)
+
+
 class TestXAlignmentWithPruning(unittest.TestCase):
     """連続 x が具体トポロジー（pruning 後）の変数だけに絞られて evaluator に渡ること。
 

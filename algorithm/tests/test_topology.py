@@ -663,6 +663,78 @@ class TestUnitRegistry(unittest.TestCase):
 
 
 # =========================================================
+# Robeson 膜モデル（ver3 12.1）
+# =========================================================
+
+class TestRobesonMembraneModel(unittest.TestCase):
+
+    def test_alpha_satisfies_upper_bound_relation(self):
+        """α は Q[GPU]·α^n = k を満たす（上界上の点）。"""
+        p = 2.70677  # 1000 GPU
+        alpha = UR.robeson_alpha(p, {})
+        q_gpu = p / UR.GPU_TO_ASPEN
+        self.assertAlmostEqual(q_gpu * alpha ** 2.888, 3.0967e8, delta=3.0967e8 * 1e-9)
+
+    def test_alpha_spot_values_match_lee2018(self):
+        """Lee 2018 の代表点: 上界上で 3840 GPU ↔ α≈50、1000 GPU ↔ α≈79.6。"""
+        c = UR.GPU_TO_ASPEN
+        self.assertAlmostEqual(UR.robeson_alpha(3840.0 * c, {}), 50.0, delta=0.5)
+        self.assertAlmostEqual(UR.robeson_alpha(1000.0 * c, {}), 79.6, delta=0.5)
+        # 高透過ほど低選択（トレードオフの向き）
+        self.assertLess(UR.robeson_alpha(6000.0 * c, {}), UR.robeson_alpha(500.0 * c, {}))
+
+    def test_alpha_rejects_nonpositive_permeance(self):
+        with self.assertRaises(ValueError):
+            UR.robeson_alpha(0.0, {})
+
+    def test_permeance_bounds_converted_to_aspen_units(self):
+        lo, hi = UR.permeance_bounds_aspen({})
+        self.assertAlmostEqual(lo, 500.0 * UR.GPU_TO_ASPEN, places=9)
+        self.assertAlmostEqual(hi, 6000.0 * UR.GPU_TO_ASPEN, places=9)
+        # case.yaml 側の GPU 指定が優先される
+        lo2, hi2 = UR.permeance_bounds_aspen({"permeance_bounds_gpu": [1000.0, 2000.0]})
+        self.assertAlmostEqual(lo2, 1000.0 * UR.GPU_TO_ASPEN, places=9)
+        self.assertAlmostEqual(hi2, 2000.0 * UR.GPU_TO_ASPEN, places=9)
+
+    def test_tie_mode_prepends_shared_variable(self):
+        """tie=True: 共有 MEMB_perm が先頭に1本。各 MEMB には perm 変数なし。"""
+        ss = make_minimal_ss()
+        ss["units"]["MEMB2"] = {
+            "type": "MEMB", "inlet": "V2",
+            "outlets": {"permeate": "V4", "retentate": "V5"},
+            "params": {"area": 1.0, "p_permeate": 0.5},
+        }
+        cvs = T.continuous_variables(ss, {"tie": True})
+        names = [cv["name"] for cv in cvs]
+        self.assertEqual(
+            names,
+            ["MEMB_perm", "MEMB1_area", "MEMB1_p_perm", "MEMB2_area", "MEMB2_p_perm"],
+        )
+        self.assertEqual(cvs[0]["unit_param"], ["MEMB*", "permeance_CO2"])
+        self.assertEqual(cvs[0]["bounds"], UR.permeance_bounds_aspen({}))
+
+    def test_untied_mode_adds_per_unit_variable(self):
+        """tie=False: 各 MEMB の変数列末尾に {unit}_perm。共有変数は無し。"""
+        ss = make_minimal_ss()
+        cvs = T.continuous_variables(ss, {"tie": False})
+        names = [cv["name"] for cv in cvs]
+        self.assertEqual(names, ["MEMB1_area", "MEMB1_p_perm", "MEMB1_perm"])
+        self.assertEqual(cvs[2]["unit_param"], ["MEMB1", "permeance_CO2"])
+
+    def test_none_membrane_model_is_backward_compatible(self):
+        """membrane_model=None は従来どおり（permeance 変数なし）。"""
+        ss = make_minimal_ss()
+        names = [cv["name"] for cv in T.continuous_variables(ss)]
+        self.assertEqual(names, ["MEMB1_area", "MEMB1_p_perm"])
+
+    def test_tie_variable_absent_without_membrane_units(self):
+        """膜ゼロの SS では tie 共有変数を付けない。"""
+        ss = make_minimal_ss()
+        ss["units"] = {}
+        self.assertEqual(T.continuous_variables(ss, {"tie": True}), [])
+
+
+# =========================================================
 # allocate_*: 採番カウンタ（削除済みIDの再利用禁止・ARCHITECTURE 3.1）
 # =========================================================
 
