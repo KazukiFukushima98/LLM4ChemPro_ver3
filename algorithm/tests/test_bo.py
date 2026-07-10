@@ -75,6 +75,36 @@ class _AllBadMock:
         return DetailedResult(metrics=Metrics.bad())
 
 
+class _ShortfallLandscapeMock:
+    """全点 infeasible で shortfall と energy が逆相関する地形（12.5(a) の検証用）。
+
+    第1連続変数 a（MEMB1_area, bounds [100, 500000]）に対し
+        purity   = 0.5 + 0.399 * t   （t=(a-lo)/(hi-lo)。最大 0.899 < 0.9 → 常に infeasible）
+        recovery = 0.85              （≥ 0.7 → shortfall は purity 由来のみ）
+        energy   = 100 + 0.01 * a
+    → min-shortfall の観測は「a 最大」、penalty-min（penalty_weight=1 なら energy 支配）は
+    「a 最小」となり、best 返却の軸を区別できる。評価した a は self.seen に記録する。
+    """
+
+    _LO, _HI = 100.0, 500000.0
+
+    def __init__(self) -> None:
+        self.seen: list[float] = []
+
+    def evaluate_topology(self, topology: dict, x_list: list[list[float]]) -> list[Metrics]:
+        out: list[Metrics] = []
+        for x in x_list:
+            a = float(x[0])
+            self.seen.append(a)
+            t = (a - self._LO) / (self._HI - self._LO)
+            out.append(Metrics(specific_energy=100.0 + 0.01 * a,
+                               purity=0.5 + 0.399 * t, recovery=0.85))
+        return out
+
+    def evaluate_detailed(self, topology: dict, x: list[float]) -> DetailedResult:
+        return DetailedResult(metrics=self.evaluate_topology(topology, [x])[0])
+
+
 class TestRunBO(unittest.TestCase):
 
     def setUp(self) -> None:
@@ -206,6 +236,47 @@ class TestRunBO(unittest.TestCase):
         # 全点が初回 bad → retry で全回収 ⇒ 評価数は名目の2倍、best は有限値
         self.assertEqual(n_evals, 2 * nominal)
         self.assertLess(gen_log[-1]["best_fitness"], BAD_VALUE)
+
+    def test_bootstrap_best_returns_min_shortfall(self) -> None:
+        """12.5(a): 全 infeasible 終了時、best は penalty-min ではなく min-shortfall の観測。
+
+        penalty_weight=1 だと旧来の penalty-min は energy 支配（=a 最小）を選ぶが、
+        bootstrap 相の探索軸は shortfall なので a 最大（purity 最良）を返すべき。
+        """
+        from bo import run_bo
+        ss = _load_seed()
+        case = _make_case()
+        case["penalty_weight"] = 1.0  # penalty-min と shortfall-min の選択を分離する
+        mock = _ShortfallLandscapeMock()
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, _ = run_bo(ss, case, mock, seed=21)
+        self.assertTrue(all(g["phase"] == "bootstrap" for g in gen_log))
+        # 観測された a のうち最大（= shortfall 最小）が返る
+        self.assertAlmostEqual(best[0], max(mock.seen), places=6)
+
+    def test_bootstrap_off_best_keeps_legacy_penalty_min(self) -> None:
+        """12.5(a) ロールバック口: bootstrap: off なら旧来の penalty-min 返却のまま。"""
+        from bo import run_bo
+        ss = _load_seed()
+        case = _make_case({"bootstrap": "off"})
+        case["penalty_weight"] = 1.0
+        mock = _ShortfallLandscapeMock()
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, _ = run_bo(ss, case, mock, seed=22)
+        self.assertTrue(all(g["phase"] == "cei" for g in gen_log))
+        # penalty_weight=1 では fitness ≈ energy = 100 + 0.01a → a 最小が返る
+        self.assertAlmostEqual(best[0], min(mock.seen), places=6)
+
+    def test_bootstrap_yaml_false_treated_as_off(self) -> None:
+        """YAML 1.1 は `off` を bool False にパースする。False でも off 扱いになること。"""
+        from bo import run_bo
+        ss = _load_seed()
+        case = _make_case({"bootstrap": False})
+        mock = _ShortfallLandscapeMock()
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, _ = run_bo(ss, case, mock, seed=23)
+        self.assertTrue(all(g["phase"] == "cei" for g in gen_log),
+                        f"bootstrap=False は off のはずが {[g['phase'] for g in gen_log]}")
 
     def test_fixed_features_exclude_unbuildable_combos(self) -> None:
         """トグルペア（片方しか ON にできない）でビルド不能な組合せが探索空間から除外される。"""

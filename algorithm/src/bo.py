@@ -17,7 +17,9 @@ ga.py と差し替え可能な run_bo(ss, case, evaluator, seed) シグネチャ
       実行時 bad は retry_bad 回まで同一トポロジーで再評価（一時的 wedge の偽 infeasible
       汚染を防ぐ。リトライ後も bad なら真の非収束として学習）
     - ビルド不能なバイナリ組合せは fixed_features_list から事前除外（予算の希釈防止）
-    - best_f は feasible（両制約満たす）観測のうち energy 最良
+    - best_f は feasible（両制約満たす）観測のうち energy 最良。**全 infeasible のまま
+      終了した場合は min-shortfall の観測を返す**（同率は penalty 込み fitness で
+      tie-break。12.5(a)。bootstrap: off なら旧来の penalty-min）
     - **ロールバック口**: case.yaml の bo: に `bootstrap: off` / `retry_bad: 0` を書けば
       コード変更なしで run21 までの挙動に戻る
 
@@ -77,6 +79,18 @@ _BO_DEFAULTS: dict[str, Any] = {
     # GP を汚染するのを防ぐ。リトライしても bad ＝ 真の非収束として学習される。
     "retry_bad": 1,
 }
+
+
+def _is_off(value: Any) -> bool:
+    """case.yaml のフラグ値が「off」を意味するか判定する。
+
+    YAML 1.1（PyYAML）は素の `off`/`no`/`false` を bool False にパースするため、
+    文字列比較 `value != "off"` だけではロールバック口が効かない。文字列・bool の
+    両表現を吸収する（"shortfall" 等の有効値は off 扱いにならない）。
+    """
+    if isinstance(value, str):
+        return value.strip().lower() in ("off", "false", "no", "0")
+    return value is None or value is False or value == 0
 
 
 def _fitness(m: Metrics, targets: dict, penalty_w: float) -> float:
@@ -277,7 +291,10 @@ def run_bo(
 
     Returns
     -------
-    best     : ロギング fitness（penalty 込み）最良の x（DEAP Individual 互換の素な list）
+    best     : 最良の x（DEAP Individual 互換の素な list）。feasible 観測があれば
+               その中の energy 最小。全 infeasible なら min-shortfall の観測
+               （同率は penalty 込み fitness で tie-break）。bootstrap: off のときのみ
+               旧来の penalty 込み fitness 最小
     gen_log  : [{"gen": i, "best_fitness": f}, ...] (長さ n_iter)
                best_fitness は penalty 込み値で、SST signals 互換のため
     n_evals  : 総評価回数
@@ -296,7 +313,8 @@ def run_bo(
     n_init       = int(bo_cfg["n_init"])
     n_iter       = int(bo_cfg["n_iter"])
     q_batch      = int(bo_cfg["q_batch"])
-    bootstrap    = str(bo_cfg.get("bootstrap", "shortfall"))  # "shortfall" | "off"
+    # "shortfall" | "off"。YAML 1.1 は `off` を bool False にパースするので _is_off で吸収
+    bootstrap_on = not _is_off(bo_cfg.get("bootstrap", "shortfall"))
     retry_bad    = int(bo_cfg.get("retry_bad", 1))
 
     device = _select_device()
@@ -315,7 +333,7 @@ def run_bo(
     print(f"[CBO] device={device}, d={d} (binary={n_bin}, cont={n_cont}), "
           f"n_init={n_init}, n_iter={n_iter}, q_batch={q_batch}, "
           f"fixed_features={len(fixed_features_list)}/{2**n_bin} (unbuildable excluded), "
-          f"bootstrap={bootstrap}, retry_bad={retry_bad}, "
+          f"bootstrap={'shortfall' if bootstrap_on else 'off'}, retry_bad={retry_bad}, "
           f"constraints: purity≥{purity_min}, recovery≥{recovery_min}")
 
     # ----- 1. Sobol 初期サンプル -----
@@ -344,7 +362,7 @@ def run_bo(
         # 縮退し、高エネルギー側の feasible 盆地へ行かない。第1相ではエネルギーを完全に
         # 無視して「制約不足量」だけを最小化し、初の feasible が出た反復から CEI に切替える。
         # bootstrap="off" で常に CEI（run21 までの挙動）へ戻せる。
-        use_bootstrap = (bootstrap != "off") and (not bool(feasible_mask.any()))
+        use_bootstrap = bootstrap_on and (not bool(feasible_mask.any()))
         phase = "bootstrap" if use_bootstrap else "cei"
 
         # GP fit → acqf 最適化。失敗時（例: 初期 Sobol が全 bad で outcome の分散ゼロ、
@@ -454,7 +472,11 @@ def run_bo(
     # ----- 5. best 個体を選んで DEAP Individual 互換 list で返す -----
     # CBO は constraint satisfaction を優先する設計なので、feasible 観測があれば
     # その中で energy 最小を返す（infeasible 良点を選ぶと SST 判定軸に反する）。
-    # 全 infeasible のときのみ penalty 込み fitness 最小にフォールバック。
+    # 全 infeasible のときは bootstrap 相の探索軸と返却軸を揃えて min-shortfall の
+    # 観測を返す（12.5(a)。run23 iter_004: 探索が踏んだ shortfall 0.014 の点が
+    # 旧 penalty-min 選択で埋もれ 0.063 が記録された）。同率は penalty 込み fitness
+    # で tie-break（lexsort は安定ソートなので同 seed で決定論的）。
+    # bootstrap: off のときのみ旧来の penalty-min フォールバック。
     final_feasible_mask = (all_p_raw >= purity_min) & (all_r_raw >= recovery_min) & all_v
     if final_feasible_mask.any():
         energy_for_select = np.where(final_feasible_mask, all_e_raw, np.inf)
@@ -464,7 +486,16 @@ def run_bo(
             _fitness(Metrics(specific_energy=e, purity=p, recovery=r), targets, penalty_w)
             for e, p, r in zip(all_e_raw, all_p_raw, all_r_raw)
         ])
-        best_idx = int(np.argmin(all_fitness))
+        if bootstrap_on:
+            # bad 観測は purity=0/recovery=0 で shortfall 最大に落ち、valid と同率の
+            # 場合も fitness（bad は BAD_VALUE）の tie-break で valid が勝つ
+            shortfall = (
+                np.maximum(0.0, purity_min   - all_p_raw)
+                + np.maximum(0.0, recovery_min - all_r_raw)
+            )
+            best_idx = int(np.lexsort((all_fitness, shortfall))[0])
+        else:
+            best_idx = int(np.argmin(all_fitness))
     best_x = all_x[best_idx].detach().cpu().numpy()
     best_individual: list[float] = [float(v) for v in best_x]
 
