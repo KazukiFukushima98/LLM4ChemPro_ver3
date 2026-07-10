@@ -44,19 +44,24 @@ ECONOMICS_DEFAULTS: dict[str, float] = {
 def feed_co2_t_per_h(feed: dict[str, Any]) -> float:
     """case.yaml.feed から feed 中の CO2 質量流量 [t/h] を計算する。
 
-    現行の組合せ（FLOWBASE=MASS の totflow [kg/h] ＋ BASIS=MOLE-FRAC の co2_frac）
-    のみ対応。二成分系（CO2/N2）を仮定し、モル分率→質量分率に換算する。
+    **TOTFLOW はモル流量 [kmol/h] として解釈する**：case.yaml は flowbase: MASS を
+    書き込むが、実機では TOTFLOW がモル流量として効くことを 2026-07-10 の smoke_feed
+    で実測確定した（totflow=2.44e6 → V0 全モル流量 2.44e6 kmol/h。ver2 run12 の記録
+    「totflow=1000 で feed CO2=150」とも整合＝ver2 時代から同挙動）。したがって
+    CO2 質量流量 = totflow[kmol/h] × co2_frac × MW_CO2 / 1000。
+
+    ガードは「動作実績のある設定の組合せ」からの逸脱検知として維持する
+    （書き込み列を変えた場合は実機挙動が変わり得るため、この換算も再検証が必要）。
     """
     if str(feed.get("flowbase", "MASS")).upper() != "MASS" or \
        str(feed.get("basis", "MOLE-FRAC")).upper() != "MOLE-FRAC":
         raise ValueError(
-            "feed_co2_t_per_h は FLOWBASE=MASS + BASIS=MOLE-FRAC のみ対応 "
-            f"(got flowbase={feed.get('flowbase')!r}, basis={feed.get('basis')!r})"
+            "feed_co2_t_per_h は FLOWBASE=MASS + BASIS=MOLE-FRAC（実測: TOTFLOW=モル）"
+            f"のみ対応 (got flowbase={feed.get('flowbase')!r}, basis={feed.get('basis')!r})"
         )
     x = float(feed["co2_frac"])            # CO2 モル分率
-    mw_co2, mw_n2 = 44.0, 28.0             # simulator の spec_e 換算（44.0）と揃える
-    mass_frac = x * mw_co2 / (x * mw_co2 + (1.0 - x) * mw_n2)
-    return float(feed["totflow"]) * mass_frac / 1000.0   # kg/h → t/h
+    mw_co2 = 44.0                          # simulator の spec_e 換算（44.0）と揃える
+    return float(feed["totflow"]) * x * mw_co2 / 1000.0   # kmol/h → t/h
 
 
 def _pressure_unit_cost_per_kw(block_name: str, wnet: float, econ: dict[str, float]) -> float:

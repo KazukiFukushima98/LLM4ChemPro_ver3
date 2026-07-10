@@ -28,7 +28,7 @@ from evaluator import (  # noqa: E402
 _FEED = {
     "flowbase": "MASS",
     "basis": "MOLE-FRAC",
-    "totflow": 2440000.0,   # kg/h（Lee の 500 Nm3/s 相当）
+    "totflow": 80307.0,   # kmol/h（Lee の 500 Nm3/s。TOTFLOW は実測上モル流量・smoke_feed）
     "co2_frac": 0.15,
 }
 
@@ -39,9 +39,10 @@ def _case(economics: dict | None = None) -> dict:
 
 class TestFeedCO2MassFlow(unittest.TestCase):
 
-    def test_mole_frac_to_mass_conversion(self):
-        # 質量分率 = 0.15*44 / (0.15*44 + 0.85*28) = 6.6/30.4
-        expected = 2440000.0 * (6.6 / 30.4) / 1000.0   # ≈ 529.74 t/h
+    def test_molar_totflow_conversion(self):
+        # TOTFLOW はモル流量 [kmol/h]（2026-07-10 smoke_feed 実測）:
+        # CO2 t/h = totflow × co2_frac × 44/1000
+        expected = 80307.0 * 0.15 * 44.0 / 1000.0   # ≈ 530.03 t/h
         self.assertAlmostEqual(feed_co2_t_per_h(_FEED), expected, places=6)
 
     def test_rejects_unsupported_basis(self):
@@ -64,10 +65,10 @@ class TestCostPerTCO2(unittest.TestCase):
         # CAPEX = C·|WNET|（電気動力そのまま。η では割らない——Lee Fig.3/4 再現で確認）
         # C_TCC = 50*5e5 + 1341*50000 + 670*30000 = 112,150,000 $
         # 年間 CAPEX = 0.2*1.6*C_TCC = 35,888,000 $/y
-        # M_CO2 = 0.9 * 2440*(6.6/30.4) = 476.763 t/h → 年間 3,549,978 t
-        # capex/t = 10.109、opex/t = 300*0.04 = 12.0 → 合計 ≈ 22.11 $/t
+        # M_CO2 = 0.9 * 80307*0.15*0.044 = 477.02 t/h → 年間 3,551,916 t
+        # capex/t = 10.104、opex/t = 300*0.04 = 12.0 → 合計 ≈ 22.10 $/t
         cost = cost_per_tco2(self.METRICS, self.AREAS, _case())
-        self.assertAlmostEqual(cost, 22.11, delta=0.01)
+        self.assertAlmostEqual(cost, 22.10, delta=0.01)
 
     def test_opex_term_equals_spec_e_times_ce(self):
         # 膜も圧力機器も無ければ CAPEX=0 → cost = E*Ce
@@ -83,8 +84,8 @@ class TestCostPerTCO2(unittest.TestCase):
             energy_breakdown={**self.METRICS.energy_breakdown, "EXP1": -10000.0},
         )
         cost = cost_per_tco2(m_exp, self.AREAS, _case())
-        # 追加 CAPEX/t = 0.32 * 500*10000 / (476.763*7446) ≈ 0.4507 $/t
-        self.assertAlmostEqual(cost - base, 0.4507, delta=0.001)
+        # 追加 CAPEX/t = 0.32 * 500*10000 / (477.02*7446) ≈ 0.4505 $/t
+        self.assertAlmostEqual(cost - base, 0.4505, delta=0.001)
 
     def test_bad_metrics_returns_bad(self):
         self.assertEqual(cost_per_tco2(Metrics.bad(), self.AREAS, _case()), BAD_VALUE)
@@ -98,8 +99,8 @@ class TestCostPerTCO2(unittest.TestCase):
         cost_default = cost_per_tco2(self.METRICS, self.AREAS, _case())
         cost_free    = cost_per_tco2(self.METRICS, self.AREAS,
                                      _case({"membrane_cost": 0.0}))
-        # 膜項 = 0.32 * 50*5e5 / (476.763*7446) ≈ 2.254 $/t
-        self.assertAlmostEqual(cost_default - cost_free, 2.254, delta=0.005)
+        # 膜項 = 0.32 * 50*5e5 / (477.02*7446) ≈ 2.252 $/t
+        self.assertAlmostEqual(cost_default - cost_free, 2.252, delta=0.005)
 
 
 class TestLeeReproduction(unittest.TestCase):
@@ -112,9 +113,10 @@ class TestLeeReproduction(unittest.TestCase):
     """
 
     # Lee の feed: 500 Nm³/s, 13 mol% CO2（0°C, 22.414 L/mol）
+    # TOTFLOW はモル流量 [kmol/h]（smoke_feed 実測）: 22,307.5 mol/s × 3.6 = 80,307 kmol/h
     _LEE_FEED = {
         "flowbase": "MASS", "basis": "MOLE-FRAC",
-        "totflow": 500.0 / 0.022414 * (0.13 * 44.0 + 0.87 * 28.0) * 3.6,  # ≈2,415,633 kg/h
+        "totflow": 500.0 / 0.022414 * 3.6,   # ≈ 80,307 kmol/h
         "co2_frac": 0.13,
     }
     _RECOVERY = (61.5 * 0.95) / (500.0 * 0.13)   # 0.8988（全4設計共通）

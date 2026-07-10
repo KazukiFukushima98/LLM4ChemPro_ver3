@@ -435,7 +435,7 @@ class TestCostObjective(unittest.TestCase):
     def _cost_case() -> dict:
         case = _make_case()
         case["feed"] = {"flowbase": "MASS", "basis": "MOLE-FRAC",
-                        "totflow": 2440000.0, "co2_frac": 0.15}
+                        "totflow": 80307.0, "co2_frac": 0.15}   # kmol/h（モル解釈）
         case["optimization_targets"]["objective"] = "minimize_cost"
         return case
 

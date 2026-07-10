@@ -93,7 +93,7 @@ class TestGACostObjective(unittest.TestCase):
             "optimization_targets": {"purity_min": 0.9, "recovery_min": 0.7,
                                      "objective": "minimize_cost"},
             "feed": {"flowbase": "MASS", "basis": "MOLE-FRAC",
-                     "totflow": 2440000.0, "co2_frac": 0.15},
+                     "totflow": 80307.0, "co2_frac": 0.15},   # kmol/h（モル解釈）
             "ga": {"pop_size": 6, "n_gen": 2},
         }
         with redirect_stdout(io.StringIO()):
