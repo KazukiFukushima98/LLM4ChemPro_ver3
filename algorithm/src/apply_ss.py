@@ -498,9 +498,26 @@ def get_latest_iter_num(base_dir: str) -> int | None:
     return max(nums) if nums else None
 
 
+def _load_membrane_model() -> dict[str, Any] | None:
+    """case.yaml の membrane_model を表示用に読む（無ければ None・失敗しても落とさない）。
+
+    apply_ss はロジック上 case に依存しないが、サマリの連続変数の本数・名前を
+    GA/BO（membrane_model 込みで導出）と一致させるためだけに参照する。
+    """
+    case_path = os.path.normpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "case.yaml")
+    )
+    try:
+        import yaml
+        with open(case_path, "r", encoding="utf-8") as f:
+            return (yaml.safe_load(f) or {}).get("membrane_model")
+    except Exception:
+        return None
+
+
 def print_ss_summary(ss: dict[str, Any]) -> None:
     bvars = T.binary_variables(ss)
-    cvars = T.continuous_variables(ss)
+    cvars = T.continuous_variables(ss, _load_membrane_model())
     print()
     print("Updated SS:")
     print(f"  Iteration: {ss['iteration']}")

@@ -49,6 +49,16 @@ PDF）を gitignore 化。）
 
 - 全結合 ablation 用の seed（`ss_seed_fullyconnected.json` 相当）の承認（12.6）
 
+### コスト検証・差分レビュー（2026-07-10 実施）
+
+- **Lee Fig.3/4 の4設計でコスト式を検証**：η 除算の誤りを発見・修正（`ecf63c9`）。
+  修正後は全4設計で論文 C_cap の −2% 前後（≒意図的に省略した HX 分）に一致。
+  回帰テスト `test_cost.py::TestLeeReproduction`。
+- **787afa8→HEAD の全差分をエージェントレビュー**（ver2 実行実績と突き合わせ）：
+  実行不能（クラッシュ・次元不整合）となる箇所なし。変数順序整合は全 q×pruning×tie
+  組合せの実測で不一致ゼロを確認。指摘された軽微項目（幽霊シグナル・BAD コスト表示・
+  apply_ss サマリの permeance 欠落・log_scale コメント陳腐化）は修正済み。
+
 ### 検証項目（run24 前の Aspen 実機 smoke で一括確認）
 
 - **VP2 の WNET 読み取り欠落**（ver2 持ち越し）：run23 最適解の energy_breakdown に VP2 が
@@ -62,6 +72,10 @@ PDF）を gitignore 化。）
   （`test_cost.py::TestLeeReproduction` が回帰ガード）。Aspen Compr の既定効率は
   シミュレーションの WNET（＝エネルギー・OPEX）にだけ効く内部仮定となり、
   実機 smoke での効率ノード確認は「記録のため」に格下げ（必須ではない）。
+- **COMP 出口圧の下限 1.0 bar = feed 圧**（差分レビュー指摘）：GA の clip / BO の獲得関数は
+  境界にちょうど張り付けるため、outlet=inlet=1.0 bar の Compr を Aspen が警告/エラー扱い
+  すると境界近傍の評価が系統的に BAD になり得る（ver2 の下限は 1.1）。COMP を含む
+  smoke で outlet=1.0 の1点を確認し、問題があれば下限を 1.05〜1.1 に引き上げ提案する。
 
 ### 運用の原則（ver2 で確立・継続）
 

@@ -36,6 +36,7 @@ from subprocess_evaluator import SubprocessEvaluator, _default_kill_aspen  # noq
 from topology import (  # noqa: E402
     active_topology,
     binary_variables,
+    cont_vars_for_topology,
     continuous_variables,
     is_buildable,
     x_for_topology,
@@ -102,6 +103,11 @@ def build_results_dict(
     case を渡すと (1) membrane_model による permeance 変数の命名・次元を GA/BO 側と
     揃え、(2) performance に cost_usd_per_tCO2 を記録する（12.2。objective 設定に
     依らず energy と cost の両方を常時記録＝比較可能性の担保）。
+
+    optimal_params の連続変数は **best トポロジーに存在するものだけ**を記録する。
+    pruning で消えたユニットの変数は評価に影響しない自由次元で、optimizer が置いた
+    任意の値（境界値になりやすい）を記録すると bounds_hit が「存在しない膜の張り付き」
+    を報告し、SST エージェントを誤誘導する（幽霊シグナル防止・2026-07-10 レビュー指摘）。
     """
     membrane_model = (case or {}).get("membrane_model")
     bin_vars  = binary_variables(ss)
@@ -109,9 +115,16 @@ def build_results_dict(
     n_binary  = len(bin_vars)
 
     q_active: dict[str, int] = {bv["name"]: int(best[k] > 0.5) for k, bv in enumerate(bin_vars)}
+    topology_best = active_topology(ss, q_active)
+
+    # 幽霊シグナル防止: best トポロジーの変数だけを cont_vars_for_topology /
+    # x_for_topology の共通述語で絞る（名前と値の対応は同一フィルタなのでずれない）
+    x_cont   = [float(best[n_binary + k]) for k in range(len(cont_vars))]
+    kept_cvs = cont_vars_for_topology(cont_vars, topology_best)
+    kept_x   = x_for_topology(x_cont, cont_vars, topology_best)
     optimal_params: dict[str, Any] = dict(q_active)
-    for k, cv in enumerate(cont_vars):
-        optimal_params[cv["name"]] = float(best[n_binary + k])
+    for cv, v in zip(kept_cvs, kept_x):
+        optimal_params[cv["name"]] = v
 
     m = detailed.metrics
     performance: dict[str, Any] = {
@@ -124,9 +137,7 @@ def build_results_dict(
         # 12.2: objective 設定に依らず cost を常時記録（energy との比較可能性）。
         # 記録は付加情報なので、feed 形式非対応等で失敗しても反復は落とさない。
         try:
-            topology_best = active_topology(ss, q_active)
-            x_cont = [float(best[n_binary + k]) for k in range(len(cont_vars))]
-            areas  = membrane_areas_from_x(x_cont, cont_vars, topology_best)
+            areas = membrane_areas_from_x(x_cont, cont_vars, topology_best)
             performance["cost_usd_per_tCO2"] = cost_per_tco2(m, areas, case)
         except Exception as e:
             print(f"    cost recording skipped: {e}")
@@ -199,7 +210,11 @@ def auto_commit_iteration(
         active_cands_str = str(active_cands) if active_cands else "(none)"
 
         cost = perf.get("cost_usd_per_tCO2")
-        cost_str = f" cost={cost:.1f}$/t" if isinstance(cost, (int, float)) else ""
+        cost_str = (
+            f" cost={cost:.1f}$/t"
+            if isinstance(cost, (int, float)) and cost < BAD_VALUE  # 番兵値は表示しない
+            else ""
+        )
         title = (
             f"{run_name} iter{iter_num:03d}: "
             f"E={spec_e:.0f}kWh/tCO2{cost_str} purity={purity:.1f}% recovery={recovery:.1f}%"
@@ -403,7 +418,7 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
     print(f"  CO2 purity:       {perf['CO2_purity']*100:.1f}%")
     print(f"  CO2 recovery:     {perf['CO2_recovery']*100:.1f}%")
     print(f"  Specific energy:  {perf['specific_energy_kWh_tCO2']:.1f} kWh/tCO2")
-    if "cost_usd_per_tCO2" in perf:
+    if "cost_usd_per_tCO2" in perf and perf["cost_usd_per_tCO2"] < BAD_VALUE:
         print(f"  Capture cost:     {perf['cost_usd_per_tCO2']:.2f} $/tCO2")
     print(f"  Total compressor: {perf['total_compressor_kW']:.1f} kW")
     print(f"  Evaluations:      {n_evals}")

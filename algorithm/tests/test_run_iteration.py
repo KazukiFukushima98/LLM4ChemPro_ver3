@@ -23,6 +23,12 @@ SRC = os.path.normpath(os.path.join(HERE, "..", "src"))
 sys.path.insert(0, SRC)
 
 import run_iteration  # noqa: E402
+from evaluator import DetailedResult, Metrics  # noqa: E402
+
+try:
+    from test_topology import make_bypass_toggle_ss
+except ImportError:  # pragma: no cover
+    from tests.test_topology import make_bypass_toggle_ss
 
 
 def _mkdirs(base: str, names: list[str]) -> None:
@@ -31,6 +37,44 @@ def _mkdirs(base: str, names: list[str]) -> None:
     os.makedirs(iter_dir, exist_ok=True)
     for n in names:
         os.makedirs(os.path.join(iter_dir, n), exist_ok=True)
+
+
+class TestBuildResultsGhostParams(unittest.TestCase):
+    """optimal_params から pruned ユニットの自由次元を除外する（幽霊シグナル防止）。
+
+    x 整列修正により pruned 膜の変数は評価に影響しない自由次元となり、optimizer が
+    置いた任意の値（境界値になりやすい）をそのまま記録すると extract_bounds_hit が
+    「存在しない膜の張り付き」を報告して SST を誤誘導する。best トポロジーに存在する
+    変数だけが記録されることを検証する。
+    """
+
+    _METRICS = Metrics(specific_energy=300.0, purity=0.96, recovery=0.92,
+                       energy_breakdown={"VP1": 100.0})
+
+    def _build(self, q1: float, q2: float) -> dict:
+        ss = make_bypass_toggle_ss()
+        # 染色体: [q_1, q_2 | MEMB1_area, MEMB1_p_perm, MEMB2_area, MEMB2_p_perm]
+        best = [q1, q2, 111000.0, 0.5, 222000.0, 0.4]
+        detailed = DetailedResult(metrics=self._METRICS)
+        return run_iteration.build_results_dict(1, best, ss, detailed, [], 0)
+
+    def test_pruned_membrane_params_excluded(self) -> None:
+        """バイパス ON（MEMB2 pruned）→ MEMB2 の変数は記録されない。"""
+        results = self._build(q1=0.0, q2=1.0)
+        params = results["optimal_params"]
+        self.assertEqual(params["q_1"], 0)
+        self.assertEqual(params["q_2"], 1)
+        self.assertAlmostEqual(params["MEMB1_area"], 111000.0)
+        self.assertAlmostEqual(params["MEMB1_p_perm"], 0.5)
+        self.assertNotIn("MEMB2_area", params)
+        self.assertNotIn("MEMB2_p_perm", params)
+
+    def test_active_membrane_params_kept(self) -> None:
+        """給餌 ON（MEMB2 あり）→ 全変数が記録される。"""
+        results = self._build(q1=1.0, q2=0.0)
+        params = results["optimal_params"]
+        self.assertAlmostEqual(params["MEMB2_area"], 222000.0)
+        self.assertAlmostEqual(params["MEMB2_p_perm"], 0.4)
 
 
 class TestGetNextIterNum(unittest.TestCase):

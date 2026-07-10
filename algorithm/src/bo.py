@@ -20,11 +20,12 @@ ga.py と差し替え可能な run_bo(ss, case, evaluator, seed) シグネチャ
     - best_f は feasible（両制約満たす）観測のうち energy 最良。**全 infeasible のまま
       終了した場合は min-shortfall の観測を返す**（同率は penalty 込み fitness で
       tie-break。12.5(a)。bootstrap: off なら旧来の penalty-min）
-    - **対数スケール化（12.5(b)）**: bounds 比 50 倍超の正の連続変数（area 5000倍、
-      Robeson permeance も対象になる）は GP/acqf/Sobol の内部表現を log 空間にする。
-      線形 Normalize では細い盆地（面積軸の 0.6% 等）が正規化空間で潰れて GP に
-      見えない問題と高カット basin 捕捉への本命対処。evaluator へ渡す直前と best
-      返却時のみ実スケールへ戻す
+    - **対数スケール化（12.5(b)）**: bounds 比 50 倍超の正の連続変数は GP/acqf/Sobol の
+      内部表現を log 空間にする（線形 Normalize では細い盆地が潰れて GP に見えない問題
+      への対処）。evaluator へ渡す直前と best 返却時のみ実スケールへ戻す。
+      **注**: 12.3 の Lee 整合 bounds（area 比15・p_perm 比9.9・permeance 比12）では
+      比 50 を超える変数が無く**発火しない**（bounds_override 等で広い範囲を使う
+      将来ケースへの保険として維持。起動ログの log_scale=off 表示は正常）
     - **ロールバック口**: case.yaml の bo: に `bootstrap: off` / `retry_bad: 0` /
       `log_scale_inputs: off` を書けばコード変更なしで旧挙動に戻る
 
@@ -97,8 +98,9 @@ _BO_DEFAULTS: dict[str, Any] = {
     # GP を汚染するのを防ぐ。リトライしても bad ＝ 真の非収束として学習される。
     "retry_bad": 1,
     # 連続変数の対数スケール化（12.5(b)）。bounds 比が _LOG_SCALE_RATIO 倍を超える
-    # 正の連続変数（area 5000倍・Robeson permeance が該当）を GP/acqf/Sobol の
-    # 内部表現で log 変換する。"off" で run23 までの線形スケールに戻る（ロールバック口）。
+    # 正の連続変数を GP/acqf/Sobol の内部表現で log 変換する。"off" で線形固定。
+    # 注: 12.3 の Lee 整合 bounds では全変数が比 50 未満のため対象ゼロ＝実質不発火
+    # （bounds_override 等で広い範囲を使う将来ケースへの保険として維持）。
     "log_scale_inputs": "on",
 }
 

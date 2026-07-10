@@ -756,6 +756,33 @@ def continuous_variables(
     return result
 
 
+def _cv_in_topology(cv: dict[str, Any], units: dict[str, Any]) -> bool:
+    """連続変数エントリが具体トポロジー（units）に対して有効かの共通述語。
+
+    unit 名が "*" で終わるエントリ（例 "MEMB*"＝tie された膜共有変数）は、その
+    プレフィクスを持つユニットが1つでも残っていれば有効。
+    """
+    uname = cv["unit_param"][0]
+    if uname.endswith("*"):
+        prefix = uname[:-1]
+        return any(u.startswith(prefix) for u in units)
+    return uname in units
+
+
+def cont_vars_for_topology(
+    cont_vars: list[dict[str, Any]],
+    topology: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """テンプレート由来の連続変数リストを、具体トポロジーに存在する変数だけに絞る。
+
+    `x_for_topology` と同じ述語・同じ順序で cv エントリ側を絞る（値と名前の対応が
+    ずれないよう、必ず両者をセットで使う）。results.json の optimal_params から
+    pruned ユニットの「評価に影響しない自由次元」を除外する用途（幽霊シグナル防止）。
+    """
+    units = topology.get("units", {})
+    return [cv for cv in cont_vars if _cv_in_topology(cv, units)]
+
+
 def x_for_topology(
     x_cont: list[float],
     cont_vars: list[dict[str, Any]],
@@ -770,20 +797,14 @@ def x_for_topology(
     顕在化する整列バグ）。テンプレート順を保ったままトポロジー非存在ユニットの値を
     落とすことで、evaluator 側の zip と 1:1 に揃える。
 
-    unit 名が "*" で終わるエントリ（例 "MEMB*"＝tie された膜共有変数）は、その
-    プレフィクスを持つユニットが具体トポロジーに1つでも残っていれば保持する。
+    述語は `_cv_in_topology`（cont_vars_for_topology と共通）。
     """
     units = topology.get("units", {})
-    out: list[float] = []
-    for val, cv in zip(x_cont, cont_vars):
-        uname = cv["unit_param"][0]
-        if uname.endswith("*"):
-            prefix = uname[:-1]
-            if any(u.startswith(prefix) for u in units):
-                out.append(float(val))
-        elif uname in units:
-            out.append(float(val))
-    return out
+    return [
+        float(val)
+        for val, cv in zip(x_cont, cont_vars)
+        if _cv_in_topology(cv, units)
+    ]
 
 
 # =========================================================

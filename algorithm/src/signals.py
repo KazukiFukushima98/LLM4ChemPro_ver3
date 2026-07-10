@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
+from evaluator import BAD_VALUE            # noqa: E402
 from topology import continuous_variables  # noqa: E402
 
 
@@ -197,11 +198,13 @@ def extract_constraint_violation(results: dict, case: dict) -> ConstraintViolati
 
 def extract(results: dict, ss: dict, case: dict) -> Signals:
     """results.json + ss + case から Signals を組み立てる。"""
+    # cost の番兵値（BAD_VALUE）は「測れなかった」であり値ではないので None に落とす
     _cost = results.get("performance", {}).get("cost_usd_per_tCO2")
+    _cost_valid = isinstance(_cost, (int, float)) and _cost < BAD_VALUE
     return Signals(
         iteration=int(results.get("iteration", 0)),
         specific_energy=float(results.get("performance", {}).get("specific_energy_kWh_tCO2", 0.0)),
-        cost_per_tco2=float(_cost) if isinstance(_cost, (int, float)) else None,
+        cost_per_tco2=float(_cost) if _cost_valid else None,
         bounds_hit=extract_bounds_hit(results, ss, case.get("membrane_model")),
         energy_blocks=extract_energy_blocks(results),
         residue_losses=extract_residue_losses(results, ss),
