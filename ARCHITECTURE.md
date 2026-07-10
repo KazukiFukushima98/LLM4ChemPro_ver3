@@ -147,7 +147,8 @@ ver2 では **sink の手前に必ず Mixer を置いて sink をストリーム
 
 ### 3.6 アーク型の語彙（旧コード踏襲・aspen_builder が参照）
 
-`feed` / `membrane_permeate` / `membrane_retentate` / `product` / `residue` / `compressor` / `recycle` / `process`。
+`feed` / `membrane_permeate` / `membrane_retentate` / `product` / `residue` / `compressor` /
+`expander`（ver3 12.4 で追加・膨張機 EXP の内部アーク） / `recycle` / `process`。
 `aspen_builder` はこの `type` でブロック生成と接続を分岐する。`product`/`residue` 型は sink 行きを示すが、
 役割は頂点の role が正であり、arc 型は builder 用の補助情報。
 
@@ -685,29 +686,36 @@ ver2 で確立した手法（2〜11節）は凍結。ver3 は物理・経済設�
   工業的に非現実的で、ver2 の最適解が常に張り付いていた＝エネルギー過大の一因）。
 - `COMP.outlet_pressure` を **1〜4 bar** に（旧 1.1〜20。feed 昇圧の現実的範囲）。
 - 膜面積は先行研究の段あたり範囲 **[1e5, 1.5e6] m²** をそのまま使い、**feed 流量側を
-  先行研究の 500 Nm³/s 相当（totflow 2,440,000 kg/h）へスケールアップ**して整合させた
-  （2026-07-10 ユーザ決定。コストモデルは線形なので $/tCO2 はスケール不変）。
+  先行研究の 500 Nm³/s 相当へスケールアップ**して整合させた（2026-07-10 ユーザ決定）。
+  **feed 基準の実測事実（同日 smoke_feed で確定）**：case.yaml は `flowbase: MASS` を
+  書き込むが実機では無効で、**TOTFLOW はモル流量 [kmol/h] として効く**（ver2 時代から
+  同挙動）。したがって `totflow: 80307`（= 500 Nm³/s = 22,307.5 mol/s）。
+  `evaluator.feed_co2_t_per_h` もモル解釈で換算する。
+  実機の定量整合：feed 2.5 bar の圧縮機動力 79.9 MW ≒ Lee Fig.4a の 81.1 MW（同条件）。
   副作用：bounds 比が 15（面積）/ 9.9（p_permeate）となり、12.5(b) の対数スケール化は
   現行 bounds では発火しない（比 50 超の将来ケースへの保険として残る）。
 - 注意：bounds・feed 変更は ver2 の run との数値比較を壊す。ver3 の run シリーズ（run24〜）として
-  別管理。**流量 3 桁スケールアップの Aspen 収束は run24 前の実機 smoke で要確認**。
+  別管理。Lee スケール feed での Aspen 収束は実機 smoke 済み（2026-07-10）。
 
-### 12.4 圧力アーキテクチャ（feed 昇圧・圧整合・膨張機）
+### 12.4 圧力アーキテクチャ（feed 昇圧・圧整合・膨張機）【実装済み 2026-07-10・実機 smoke 済み】
 
-COMP ユニット型は実装済み（unit_registry→apply_ss→builder→energy 集計）だが、**現状は使っても
-効かない疑いが強い**。有効化には以下が必要：
-
-- **★Mixer 出口圧の罠**：builder（Step 3）が全 Mixer に `PRES=1.0` を固定設定しており、feed を 4 bar に
-  昇圧しても膜入口 Mixer（規則上必ず通る）で 1 bar に戻される。`PRES=0`（入口最小圧に追従）への変更が
-  必要——**移植資産の挙動変更なので Aspen 実機 smoke 検証を必須とする**（全既存フローシートの回帰確認）。
-- **リサイクル合流の圧整合**：高圧給気に 1 bar のリサイクル（auto-VP 出口圧固定）を混ぜると min 圧に落ちる。
-  物理的にはリサイクル経路の再昇圧（先行研究と同構成）。`vp_outlet_pressure` の扱い（固定値→合流先圧への
-  追従 or リサイクル用 COMP の明示追加）を設計してから実装する。
-- **膨張機（任意・エネルギー回収）**：未実装。Compr の TURBINE モデルで `_create_expander` を builder に
-  追加（`_create_compressor` と同型・中規模）。無いと先行研究の kWh/tCO2 と回収分ずれる。
-- **★検証項目（ver2 からの持ち越し疑義）**：run23 最適解の energy_breakdown に **VP2 が欠落**していた
-  （WNET 読み取り 0）。0.01 bar からの再圧縮で物理的にゼロはあり得ず、記録された比エネルギーが過小の
-  可能性。ver3 最初の Aspen smoke で VP{n} 全部の WNET ノード読み取りを確認すること。
+- **Mixer 出口圧の罠（解消）**：builder（Step 3）の全 Mixer `PRES=1.0` 固定を **`PRES=0`
+  （入口最小圧に追従）へ変更**。実機 smoke：全ストリーム 1 bar の既存構成で結果完全一致
+  （回帰なし）、feed 2.5 bar で COMP1=79.9 MW ≒ Lee Fig.4a の 81.1 MW（同条件）＝
+  COMP が初めて有効に機能することを定量確認。
+- **リサイクル合流の圧整合（方式決定）**：**明示 COMP による再昇圧**（ユーザ決定 2026-07-10）。
+  auto-VP 出口は 1 bar 固定のまま。高圧給気へ戻すリサイクルは SST エージェントが COMP を
+  経路に置いて表現する（Lee と同構成・追加実装なし・構造の要否は GA/SST が決める＝手法の
+  主張と整合）。1 bar のまま合流させると合流 Mixer が最小圧＝1 bar に落ちる点は
+  `algorithm/CLAUDE.md` に注意書き。
+- **膨張機（実装済み）**：`EXP` ユニット型（Compr の TURBINE・`_create_expander`）。
+  GA 変数なし（出口圧 params 固定・既定 1 bar＝大気放出）の構造部品で、エージェントが
+  高圧経路（昇圧後の残渣等）に `add_unit`/`add_gated_unit` で配置する。WNET は負値で
+  energy_breakdown に載り、比エネルギー（回収控除）とコスト（500 $/kW CAPEX）に算入。
+  実機 smoke：2.5 bar 残渣で −40.2 MW を回収。
+- **VP2 WNET 欠落疑義（解消）**：実機 smoke で VP1/VP2 両方の WNET が正しく読めることを
+  確認（run23 の記録は別要因の可能性。読み取り機構は健全）。
+- **COMP 出口圧の境界**：pout=1.0 bar（=feed 圧・無圧縮）でも BAD にならないことを実機確認。
 
 ### 12.5 アルゴリズム持ち越し（bo.py・run24 の前に投入推奨）
 

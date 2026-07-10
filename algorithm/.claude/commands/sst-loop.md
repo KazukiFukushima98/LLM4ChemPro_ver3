@@ -29,7 +29,7 @@ argument-hint: <run dir, 例: runs/run24> [最大反復数] [--dry]
 3. `uv run python src/apply_ss.py --base-dir RUN --iter M`
 4. `uv run python -u src/run_iteration.py --base-dir RUN > RUN/iter_(M+1)_log.txt 2>&1`（run_iteration が次番号を max+1 で自動採番）。**`--dry` 指定時は optimizer に応じた縮小フラグ＋`--no-commit` を付けて実行**（BO: `--bo-n-init 4 --bo-n-iter 3 --bo-q-batch 2`、GA: `--pop 4 --gen 3`）。
 5. 生成された新しい `results.json` を読み、**簡潔に報告**：読んだシグナル（数値）／書いた ss_change と根拠／新 results の純度・回収率・比エネルギー。
-6. **停止判定**：`CLAUDE.md` の停止条件（ユーザ停止指示／`performance` 基準で連続3反復改善なし〔制約未達中は未達量、充足後は比エネルギー。**best_fitness は判定に使わない**〕／Aspen クラッシュ×2連・収束失敗×3連）、または **N** 反復に達したら止める。いずれでもなければ 1 に戻る。
+6. **停止判定**：`CLAUDE.md` の停止条件（ユーザ停止指示／`performance` 基準で連続3反復改善なし〔制約未達中は未達量、充足後は**コスト `cost_usd_per_tCO2`**。**best_fitness は判定に使わない**〕／Aspen クラッシュ×2連・収束失敗×3連）、または **N** 反復に達したら止める。いずれでもなければ 1 に戻る。
 
 停止したら引き継ぎを **`RUN/HANDOFF.md`** に記録する（最終 performance・走った反復数・止めた理由・次にやりたいこと・注目シグナル）。`../docs/` への転記は開発セッション（リポジトリルート）が行うので書かなくてよい。run_iteration の auto-commit は任せる。失敗は記録の上で続行可否を判断（`CLAUDE.md` のロールバック判断）。
 

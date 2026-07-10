@@ -30,17 +30,13 @@ ver2（完成・`v2.0-complete`）の追跡ツリーを継承して本リポジ�
 
 ### 実装キュー（残り）
 
-1. **12.5(c) フェーズ対応 patience**（素朴な連続無改善カウントは棄却済み・要件は 12.5 の表）
-2. **12.4 圧力アーキテクチャ**（★Mixer PRES=1.0 の罠→Aspen 実機 smoke 必須・
-   ★VP2 WNET 欠落疑義の検証・リサイクル圧整合・膨張機）
-3. **run24 前の Aspen 実機 smoke**（下記の検証項目を一括確認）
-4. **run24 準備**：`algorithm/CLAUDE.md` playbook 更新（新ユニット params の permeance
-   直指定廃止・改善判定軸を cost に・membrane_model/economics の説明）→ run24 開始
-   （membrane_model.tie: **false**＝段別独立。2026-07-10 ユーザ決定）→ **12.6 ablation**
+1. **run24 開始**（`algorithm/` でセッションを開き `/sst-loop runs/run24 <max_iter>`）→ **12.6 ablation**
 
-（済 2026-07-10 追加決定：SST の変数上限を**バイナリのみ**（max_binary_variables=8）に変更、
-旧 max_variables=20 は撤廃。tie: false へ切替（seed の変数は連続6＝面積2・p_perm2・perm2）。
-CLAUDE.md/sst-loop.md の自己点検ルールも更新済み。）
+（済 2026-07-10：12.5(c) フェーズ対応 patience `057444b`／12.4 Mixer PRES=0＋膨張機 EXP
+`3111236`（実機 smoke 済み）／feed 基準の実測確定＝TOTFLOW はモル kmol/h `9925e10`／
+playbook（CLAUDE.md・sst-loop.md）を run24 向けに更新（判定軸コスト・permeance 直指定禁止・
+リサイクル再昇圧・EXP の使い方）。変数上限はバイナリのみ（max_binary_variables=8）・
+tie: false＝段別独立膜（seed の連続変数6本＋COMP/EXP 追加分）。）
 
 （済 `7b2d305`：ss_seed の膜 area を 500000 m² に更新（ユーザ指示）。reference/（参照論文
 PDF）を gitignore 化。）
@@ -59,23 +55,21 @@ PDF）を gitignore 化。）
   組合せの実測で不一致ゼロを確認。指摘された軽微項目（幽霊シグナル・BAD コスト表示・
   apply_ss サマリの permeance 欠落・log_scale コメント陳腐化）は修正済み。
 
-### 検証項目（run24 前の Aspen 実機 smoke で一括確認）
+### 検証項目 — 実機 smoke ですべて確認済み（2026-07-10。scratch/smoke_*.py）
 
-- **VP2 の WNET 読み取り欠落**（ver2 持ち越し）：run23 最適解の energy_breakdown に VP2 が
-  無い（読み取り0）。VP{n} 全部の WNET ノードを確認する。コスト目的では CAPEX も汚染する
-  ため 12.2 の前提でもある。
-- **feed 3桁スケールアップ（1000 → 2.44e6 kg/h）での Aspen 収束**（12.3 の変更）。
-- **permeance の GA 変数書き込み**（`L("CARBO-01")`/`L("NITRO-01")` ノードへの実機書き込み
-  が反映されるか。12.1 の変更）。
-- （解消 2026-07-10）圧縮機効率の非対称：Lee Fig.3/4 の4設計再現でコスト式の正しい形が
-  `CAPEX = C_unit × |WNET|`（η で割らない）と確定し、η はコスト式から消えた
-  （`test_cost.py::TestLeeReproduction` が回帰ガード）。Aspen Compr の既定効率は
-  シミュレーションの WNET（＝エネルギー・OPEX）にだけ効く内部仮定となり、
-  実機 smoke での効率ノード確認は「記録のため」に格下げ（必須ではない）。
-- **COMP 出口圧の下限 1.0 bar = feed 圧**（差分レビュー指摘）：GA の clip / BO の獲得関数は
-  境界にちょうど張り付けるため、outlet=inlet=1.0 bar の Compr を Aspen が警告/エラー扱い
-  すると境界近傍の評価が系統的に BAD になり得る（ver2 の下限は 1.1）。COMP を含む
-  smoke で outlet=1.0 の1点を確認し、問題があれば下限を 1.05〜1.1 に引き上げ提案する。
+- **VP2 の WNET 読み取り**：VP1/VP2 とも正の WNET を返すことを確認（欠落は再現せず。
+  run23 の記録は別要因の可能性。読み取り機構は健全）。
+- **Lee スケール feed での収束**：収束確認済み。ただし smoke の過程で
+  **TOTFLOW がモル流量 [kmol/h] として効く実態が判明**（flowbase: MASS の書き込みは
+  実機で無効・ver2 時代から同挙動）。totflow を 80,307 kmol/h（=500 Nm³/s）に修正し、
+  feed_co2_t_per_h をモル解釈に修正（`9925e10`）。
+- **permeance の GA 変数書き込み**：1000→4000 GPU で純度・回収率・動力が変化＝反映確認。
+- **Mixer PRES=0 と COMP 有効化**：既存構成で回帰なし、feed 2.5 bar で
+  COMP1=79.9 MW ≒ Lee Fig.4a の 81.1 MW（同条件）＝定量整合。
+- **膨張機 EXP**：2.5 bar 残渣で WNET=−40.2 MW（電力回収）を確認。
+- **COMP 出口圧の境界 pout=1.0 bar**：BAD にならず（下限引き上げ不要）。
+- （解消済み）圧縮機効率の非対称：コスト式は `CAPEX = C_unit × |WNET|`（η なし）で確定
+  （Lee 4設計再現 `ecf63c9`・回帰ガード `test_cost.py::TestLeeReproduction`）。
 
 ### 運用の原則（ver2 で確立・継続）
 
