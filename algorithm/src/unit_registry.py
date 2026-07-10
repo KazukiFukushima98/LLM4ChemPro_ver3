@@ -14,13 +14,19 @@ from typing import Any
 
 
 # 連続変数の既定境界（ユニット種別ごと）
+# ver3（12.3）: 先行研究 Lee et al., J. Membr. Sci. 563 (2018) 820-834 の §2.6 に整合。
+#   - area: 段あたり [1e5, 1.5e6] m²（feed も Lee の 500 Nm³/s 相当へスケールアップ済み。
+#     case.yaml feed.totflow 参照。コストモデルが線形なので $/tCO2 はスケール不変）
+#   - p_permeate: 真空ポンプ吸引圧 0.1-1 bar（0.01 bar=10 mbar は工業的に非現実的。
+#     上限は駆動力ゼロを避けて 0.99）
+#   - COMP.outlet_pressure: 1-4 bar（feed 昇圧の現実的範囲）
 UNIT_BOUNDS: dict[str, dict[str, list[float]]] = {
     "MEMB": {
-        "area":       [100.0, 500000.0],
-        "p_permeate": [0.01, 0.99],
+        "area":       [100000.0, 1500000.0],
+        "p_permeate": [0.1, 0.99],
     },
     "COMP": {
-        "outlet_pressure": [1.1, 20.0],
+        "outlet_pressure": [1.0, 4.0],
     },
 }
 

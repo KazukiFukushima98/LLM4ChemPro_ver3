@@ -78,7 +78,7 @@ class _AllBadMock:
 class _ShortfallLandscapeMock:
     """全点 infeasible で shortfall と energy が逆相関する地形（12.5(a) の検証用）。
 
-    第1連続変数 a（MEMB1_area, bounds [100, 500000]）に対し
+    第1連続変数 a（MEMB1_area。bounds は UNIT_BOUNDS から動的に取る）に対し
         purity   = 0.5 + 0.399 * t   （t=(a-lo)/(hi-lo)。最大 0.899 < 0.9 → 常に infeasible）
         recovery = 0.85              （≥ 0.7 → shortfall は purity 由来のみ）
         energy   = 100 + 0.01 * a
@@ -86,7 +86,7 @@ class _ShortfallLandscapeMock:
     「a 最小」となり、best 返却の軸を区別できる。評価した a は self.seen に記録する。
     """
 
-    _LO, _HI = 100.0, 500000.0
+    _LO, _HI = T.continuous_variables(_load_seed())[0]["bounds"]
 
     def __init__(self) -> None:
         self.seen: list[float] = []
@@ -327,14 +327,16 @@ class TestRunBO(unittest.TestCase):
 class TestLogScaleInputs(unittest.TestCase):
     """12.5(b) 対数スケール化（bounds 比 50 倍超の正の連続変数を log 空間で探索）。"""
 
-    def test_mask_selects_wide_positive_bounds_on_seed(self) -> None:
-        """seed の4連続変数（area 比5000・p_permeate 比99）は全部 log 対象。"""
+    def test_mask_on_seed_with_lee_bounds_is_all_false(self) -> None:
+        """ver3 の Lee 整合 bounds（area 比15・p_permeate 比9.9）では seed に log 対象なし。
+
+        12.5(b) の実装は bounds 比 50 倍超のケース（bounds_override や将来の広い範囲）
+        への保険として残る。正例は下の synthetic テストがカバーする。
+        """
         import bo as bo_mod
         cont_vars = T.continuous_variables(_load_seed())
         mask = bo_mod._log_scale_mask(0, cont_vars, enabled=True)
-        names = [cv["name"] for cv, m in zip(cont_vars, mask) if m]
-        self.assertEqual(
-            names, ["MEMB1_area", "MEMB1_p_perm", "MEMB2_area", "MEMB2_p_perm"])
+        self.assertFalse(mask.any())
 
     def test_mask_excludes_narrow_nonpositive_and_binary(self) -> None:
         """比 ≤50・下限 ≤0 の連続変数と binary 次元は対象外。"""

@@ -70,65 +70,65 @@ class TestBoundsHit(unittest.TestCase):
 
     def test_middle_value_no_hit(self):
         ss = load_seed()
-        # area bounds = [100, 500000]; 中央付近 → 張り付かない
-        # p_perm bounds = [0.01, 0.99]; 中央 0.5 → 張り付かない
+        # area bounds = [100000, 1500000]; 中央付近 → 張り付かない
+        # p_perm bounds = [0.1, 0.99]; 中央 0.5 → 張り付かない
         results = make_results(optimal_params={
-            "MEMB1_area": 200000.0, "MEMB1_p_perm": 0.5,
-            "MEMB2_area": 200000.0, "MEMB2_p_perm": 0.5,
+            "MEMB1_area": 700000.0, "MEMB1_p_perm": 0.5,
+            "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.5,
         })
         hits = S.extract_bounds_hit(results, ss)
         self.assertEqual(hits, [])
 
     def test_lower_hit_detected(self):
         ss = load_seed()
-        # p_perm の下限 0.01 に張り付き
+        # p_perm の下限 0.1 に張り付き
         results = make_results(optimal_params={
-            "MEMB1_area": 200000.0, "MEMB1_p_perm": 0.5,
-            "MEMB2_area": 200000.0, "MEMB2_p_perm": 0.01,
+            "MEMB1_area": 700000.0, "MEMB1_p_perm": 0.5,
+            "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.1,
         })
         hits = S.extract_bounds_hit(results, ss)
         self.assertEqual(len(hits), 1)
         h = hits[0]
         self.assertEqual(h.name, "MEMB2_p_perm")
         self.assertEqual(h.side, "lower")
-        self.assertAlmostEqual(h.limit, 0.01)
+        self.assertAlmostEqual(h.limit, 0.1)
         self.assertLess(h.slack_ratio, S.BOUNDS_HIT_SLACK)
 
     def test_upper_hit_detected(self):
         ss = load_seed()
         results = make_results(optimal_params={
-            "MEMB1_area": 499000.0, "MEMB1_p_perm": 0.5,  # 上限 500000 に張り付き
-            "MEMB2_area": 200000.0, "MEMB2_p_perm": 0.5,
+            "MEMB1_area": 1490000.0, "MEMB1_p_perm": 0.5,  # 上限 1500000 に張り付き
+            "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.5,
         })
         hits = S.extract_bounds_hit(results, ss)
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0].name, "MEMB1_area")
         self.assertEqual(hits[0].side, "upper")
-        self.assertAlmostEqual(hits[0].limit, 500000.0)
+        self.assertAlmostEqual(hits[0].limit, 1500000.0)
 
     def test_bounds_override_reflected(self):
         ss = load_seed()
-        # MEMB1.area の bounds を [200, 100000] に上書き
-        ss["units"]["MEMB1"]["bounds_override"] = {"area": [200.0, 100000.0]}
-        # 元の bounds=[100,500000] では中央扱いだった 99500 が、
-        # 上書き後 [200, 100000] では上限張り付きになる
+        # MEMB1.area の bounds を [200000, 700000] に上書き
+        ss["units"]["MEMB1"]["bounds_override"] = {"area": [200000.0, 700000.0]}
+        # 既定 bounds=[100000,1500000] では中央扱いの 695000 が、
+        # 上書き後 [200000, 700000] では上限張り付きになる
         results = make_results(optimal_params={
-            "MEMB1_area": 99500.0, "MEMB1_p_perm": 0.5,
-            "MEMB2_area": 200000.0, "MEMB2_p_perm": 0.5,
+            "MEMB1_area": 695000.0, "MEMB1_p_perm": 0.5,
+            "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.5,
         })
         hits = S.extract_bounds_hit(results, ss)
         names = [h.name for h in hits]
         self.assertIn("MEMB1_area", names)
         h = next(h for h in hits if h.name == "MEMB1_area")
         self.assertEqual(h.side, "upper")
-        self.assertAlmostEqual(h.limit, 100000.0)
+        self.assertAlmostEqual(h.limit, 700000.0)
 
     def test_missing_param_skipped(self):
         ss = load_seed()
         # MEMB1_area が optimal_params に無い → skip（KeyError にならない）
         results = make_results(optimal_params={
             "MEMB1_p_perm": 0.5,
-            "MEMB2_area": 200000.0, "MEMB2_p_perm": 0.5,
+            "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.5,
         })
         hits = S.extract_bounds_hit(results, ss)
         self.assertEqual(hits, [])  # MEMB1_area が無いだけで他は中央
@@ -269,8 +269,8 @@ class TestExtractAggregator(unittest.TestCase):
             iteration=3,
             purity=0.514, recovery=0.267, spec_e=290.3,
             optimal_params={
-                "MEMB1_area": 200000.0, "MEMB1_p_perm": 0.5,
-                "MEMB2_area": 200000.0, "MEMB2_p_perm": 0.01,  # 下限張り付き
+                "MEMB1_area": 700000.0, "MEMB1_p_perm": 0.5,
+                "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.1,  # 下限張り付き
             },
             energy_breakdown={"VP1": 146.0, "VP2": 364.0},      # VP2 dominant
             stream_results={
@@ -293,8 +293,8 @@ class TestExtractAggregator(unittest.TestCase):
         ss = load_seed()
         case = make_case()
         results = make_results(
-            optimal_params={"MEMB1_area": 200000.0, "MEMB1_p_perm": 0.5,
-                            "MEMB2_area": 200000.0, "MEMB2_p_perm": 0.5},
+            optimal_params={"MEMB1_area": 700000.0, "MEMB1_p_perm": 0.5,
+                            "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.5},
             energy_breakdown={"VP1": 100.0, "VP2": 100.0},
         )
         sig = S.extract(results, ss, case)

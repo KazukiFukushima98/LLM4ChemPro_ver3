@@ -4,7 +4,9 @@
 
 feed:
   flowbase: MASS          # feed basis. Applied post-build (overrides builder defaults).
-  totflow: 1000.0
+  totflow: 2440000.0      # kg/h. Lee et al. (2018) の 600MWe 石炭火力排ガス 500 Nm³/s 相当
+                          # （CO2 15mol% の平均分子量 30.4 で換算）。膜面積 bounds を Lee の
+                          # 値のまま使うため feed 側をスケールアップ（2026-07-10 ユーザ決定）。
   co2_frac: 0.15          # post-combustion. For DAC, set ~0.00042 (420 ppm).
   temp: 25.0              # °C. Feed temperature.
   pressure: 1.0           # bar. Feed pressure.
