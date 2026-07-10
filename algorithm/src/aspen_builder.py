@@ -30,6 +30,8 @@ Stream naming:
   MIXV{j}   : Mixer block name ({j} is vid numeric part)
   MEMB{n}   : membrane block (unit name as-is)
   VP{n}/VPI{n} : auto-VP block and its inlet stream (n matches MEMB{n})
+  VPO{n}/HXV{n}: auto-VP 出口の中間ストリームと自動冷却器（35°C・ver3 12.4）
+  HCI{n}/HXC{n}: COMP{n} 出口の中間ストリームと自動冷却器（同上）
 
 NOTE: Aspen does not allow underscores in block or stream names.
 """
@@ -317,6 +319,30 @@ def _create_and_connect_unit(aspen, block_node, unit_name, arcs,
         )
 
 
+# ver3 12.4（ユーザ決定 2026-07-10）: 圧縮系（auto-VP・明示 COMP）の出口に自動付与する
+# 冷却温度 [°C]。Lee (2018) の膜運転温度と同じ。中間冷却が無いと圧縮熱が下流へ
+# カスケードして動力が膨張し（Fig.3a 再現: P_tot 論文比 1.38 → 35°C 冷却で 0.94）、
+# 高分子膜の許容温度も超える。冷却は auto-VP と同じ「工学的標準装備」として builder が
+# 自動挿入し、GA/SST の探索対象にしない。Heater duty は電力ではないので energy には
+# 算入しない（冷却水コストは Lee もモデル外）。
+AUTO_COOLER_TEMP_C = 35.0
+
+
+def _attach_cooler(aspen, block_node, stream_node, source_port_path,
+                   cooler_name, inter_stream, out):
+    """圧縮系ブロックの出口に 35°C 冷却器（Heater・圧損なし）を挟む。
+
+    <source>.P(OUT) → inter_stream → {cooler_name}.F(IN)、{cooler_name}.P(OUT) → out
+    """
+    stream_node.Elements.Add(inter_stream)
+    aspen.Tree.FindNode(source_port_path).Elements.Add(inter_stream)
+    block_node.Elements.Add(f"{cooler_name}!Heater")
+    aspen.Tree.FindNode(rf"\Data\Blocks\{cooler_name}\Input\TEMP").value = AUTO_COOLER_TEMP_C
+    aspen.Tree.FindNode(rf"\Data\Blocks\{cooler_name}\Input\PRES").value = 0.0  # 圧損なし
+    aspen.Tree.FindNode(rf"\Data\Blocks\{cooler_name}\Ports\F(IN)").Elements.Add(inter_stream)
+    aspen.Tree.FindNode(rf"\Data\Blocks\{cooler_name}\Ports\P(OUT)").Elements.Add(out)
+
+
 def _create_membrane(aspen, block_node, unit_name, arcs, params, mixer_vertices, auto_vps):
     """
     Create a GasPermModule block and connect its ports.
@@ -326,8 +352,8 @@ def _create_membrane(aspen, block_node, unit_name, arcs, params, mixer_vertices,
       membrane_retentate → Retentate(OUT)
     Inlet (Inlet(IN)) = vid string (stream output by the Mixer at the src vertex)
 
-    A VP{n} (Compr, outlet=1 bar) is auto-inserted on the permeate side:
-      MEMB{n}.Permeate(OUT) → VPI{n} → VP{n}.F(IN) → VP{n}.P(OUT) → (original downstream stream)
+    A VP{n} (Compr, outlet=1 bar) + auto-cooler is inserted on the permeate side:
+      MEMB{n}.Permeate(OUT) → VPI{n} → VP{n} → VPO{n} → HXV{n}(35°C) → (original downstream)
     """
     stream_node = aspen.Tree.FindNode(r'\Data\Streams')
     memb_num = unit_name.replace("MEMB", "")
@@ -377,7 +403,12 @@ def _create_membrane(aspen, block_node, unit_name, arcs, params, mixer_vertices,
             aspen.Tree.FindNode(rf"\Data\Blocks\{vp_name}\Input\OPT_SPEC").value   = "PRES"
             aspen.Tree.FindNode(rf"\Data\Blocks\{vp_name}\Input\PRES").value       = 1.0
             aspen.Tree.FindNode(rf"\Data\Blocks\{vp_name}\Ports\F(IN)").Elements.Add(vpi_name)
-            aspen.Tree.FindNode(rf"\Data\Blocks\{vp_name}\Ports\P(OUT)").Elements.Add(out)
+            # 自動冷却（12.4）: VP{n} → VPO{n} → HXV{n}(35°C) → out
+            _attach_cooler(
+                aspen, block_node, stream_node,
+                rf"\Data\Blocks\{vp_name}\Ports\P(OUT)",
+                cooler_name=f"HXV{memb_num}", inter_stream=f"VPO{memb_num}", out=out,
+            )
 
             auto_vps.append(vp_name)
         elif arc_def["type"] == "membrane_retentate":
@@ -387,7 +418,9 @@ def _create_membrane(aspen, block_node, unit_name, arcs, params, mixer_vertices,
 
 
 def _create_compressor(aspen, block_node, unit_name, arcs, params, mixer_vertices):
-    """Create a Compr block and connect its ports."""
+    """Create a Compr block and connect its ports（出口に自動冷却器付き・12.4）."""
+    stream_node = aspen.Tree.FindNode(r'\Data\Streams')
+    comp_num = unit_name.replace("COMP", "")
     block_node.Elements.Add(f"{unit_name}!Compr")
     aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\MODEL_TYPE").value = "COMPRESSOR"
     aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\TYPE").value       = "ISENTROPIC"
@@ -396,8 +429,12 @@ def _create_compressor(aspen, block_node, unit_name, arcs, params, mixer_vertice
 
     for i, j, _ in arcs:
         aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Ports\F(IN)").Elements.Add(i)
-        aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Ports\P(OUT)").Elements.Add(
-            _out_stream(i, j, mixer_vertices)
+        # 自動冷却（12.4）: COMP{n} → HCI{n} → HXC{n}(35°C) → out
+        _attach_cooler(
+            aspen, block_node, stream_node,
+            rf"\Data\Blocks\{unit_name}\Ports\P(OUT)",
+            cooler_name=f"HXC{comp_num}", inter_stream=f"HCI{comp_num}",
+            out=_out_stream(i, j, mixer_vertices),
         )
 
 
