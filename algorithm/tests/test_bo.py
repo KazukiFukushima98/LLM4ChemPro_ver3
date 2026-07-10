@@ -358,6 +358,56 @@ class TestMembraneModelIntegration(unittest.TestCase):
         self.assertEqual(len(best), 6)
 
 
+class TestCostObjective(unittest.TestCase):
+    """12.2: objective=minimize_cost で BO の目的・best 選択がコスト軸になる。"""
+
+    @staticmethod
+    def _cost_case() -> dict:
+        case = _make_case()
+        case["feed"] = {"flowbase": "MASS", "basis": "MOLE-FRAC",
+                        "totflow": 2440000.0, "co2_frac": 0.15}
+        case["optimization_targets"]["objective"] = "minimize_cost"
+        return case
+
+    def test_best_is_min_cost_not_min_energy(self) -> None:
+        """energy が全点同一でも、cost（膜面積に比例）最小の観測が best に選ばれる。"""
+        from bo import run_bo
+
+        class _FlatEnergyMock:
+            """energy 一定・常に feasible。cost は膜面積だけで決まる地形。"""
+
+            def __init__(self) -> None:
+                self.area_sums: list[float] = []
+
+            def evaluate_topology(self, topology, x_list):
+                out = []
+                for x in x_list:
+                    # cont vars = [M1_area, M1_pp, M2_area, M2_pp]（seed・membrane_model なし）
+                    self.area_sums.append(float(x[0]) + float(x[2]))
+                    out.append(Metrics(specific_energy=300.0, purity=0.96, recovery=0.92))
+                return out
+
+            def evaluate_detailed(self, topology, x):
+                return DetailedResult(metrics=self.evaluate_topology(topology, [x])[0])
+
+        ss = _load_seed()
+        mock = _FlatEnergyMock()
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, _ = run_bo(ss, self._cost_case(), mock, seed=61)
+        # 全点 feasible → best は cost 最小 ＝ 膜面積合計が最小の観測
+        best_sum = best[0] + best[2]
+        self.assertAlmostEqual(best_sum, min(mock.area_sums), places=6)
+
+    def test_energy_mode_unaffected(self) -> None:
+        """objective 未指定（energy）では従来どおり完走する（回帰）。"""
+        from bo import run_bo
+        ss = _load_seed()
+        case = _make_case()   # objective なし
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, _ = run_bo(ss, case, _SmoothMock(), seed=62)
+        self.assertEqual(len(gen_log), _TEST_BO["n_iter"])
+
+
 class TestXAlignmentWithPruning(unittest.TestCase):
     """連続 x が具体トポロジー（pruning 後）の変数だけに絞られて evaluator に渡ること。
 
@@ -389,7 +439,7 @@ class TestXAlignmentWithPruning(unittest.TestCase):
             [1.0, 0.0, 200000.0, 0.5, 300000.0, 0.4],  # 2段 → x は 4 変数
             [0.0, 1.0, 200000.0, 0.5, 300000.0, 0.4],  # MEMB2 prune → x は 2 変数
         ])
-        e, p, r, v, n = bo_mod._evaluate_batch_multi(
+        o, e, p, r, v, n = bo_mod._evaluate_batch_multi(
             x_np, ss, bin_vars, cont_vars, 2, _DimRecorder(), retry_bad=0
         )
         self.assertIn((2, 4), seen, f"2段側の次元が不正: {seen}")

@@ -60,7 +60,14 @@ from torch.quasirandom import SobolEngine
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from evaluator import BAD_VALUE, Evaluator, Metrics  # noqa: E402
+from evaluator import (  # noqa: E402
+    BAD_VALUE,
+    ECONOMICS_DEFAULTS,
+    Evaluator,
+    Metrics,
+    cost_per_tco2,
+    membrane_areas_from_x,
+)
 from topology import (  # noqa: E402
     active_topology,
     binary_variables,
@@ -138,19 +145,21 @@ def _to_eval_space(x_np: np.ndarray, log_mask: np.ndarray) -> np.ndarray:
     return out
 
 
-def _fitness(m: Metrics, targets: dict, penalty_w: float) -> float:
+def _fitness(obj_value: float, purity: float, recovery: float,
+             targets: dict, penalty_w: float) -> float:
     """ロギング・互換用の penalty 込み fitness（GA._fitness と同一定義）。
 
+    obj_value は目的値（energy または cost。12.2 の objective 切替に追従）。
     Constrained BO 本体は使わない（acqf が constraints + objective で扱う）。
     gen_log / best 戻り値の表示・SST 互換のためだけに残す。
     """
-    if m.specific_energy >= BAD_VALUE:
+    if obj_value >= BAD_VALUE:
         return BAD_VALUE
     penalty = (
-        penalty_w * max(0.0, targets["purity_min"]   - m.purity)   ** 2 +
-        penalty_w * max(0.0, targets["recovery_min"] - m.recovery) ** 2
+        penalty_w * max(0.0, targets["purity_min"]   - purity)   ** 2 +
+        penalty_w * max(0.0, targets["recovery_min"] - recovery) ** 2
     )
-    return m.specific_energy + penalty
+    return obj_value + penalty
 
 
 def _evaluate_batch_multi(
@@ -161,8 +170,9 @@ def _evaluate_batch_multi(
     n_bin: int,
     evaluator: Evaluator,
     retry_bad: int = 1,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
-    """binary key でグループ化 → 各グループを 1 ビルドで一括評価。3 outcome を返す。
+    objective_fn=None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+    """binary key でグループ化 → 各グループを 1 ビルドで一括評価。目的値＋3 outcome を返す。
 
     GA の `_evaluate_population` と同じ畳み込み（同一 binary に固まった点は 1 Aspen build
     で q 点まとめて simulate）。連続 x はテンプレート全次元から `x_for_topology` で
@@ -174,8 +184,12 @@ def _evaluate_batch_multi(
     bad な点は真の非収束として残す（infeasible 学習は正しい挙動）。
     is_buildable で弾かれたグループは決定論的な構造不能なのでリトライしない。
 
+    objective_fn（12.2）: `(metrics, x_cont_template, topology) -> float` を渡すと
+    objective_arr がその値になる（コスト目的）。None なら objective = energy。
+
     Returns
     -------
+    objective_arr: (N,) 最適化の目的値（energy または cost。bad は BAD_VALUE）
     energy_arr   : (N,) specific_energy_kWh_tCO2（bad は BAD_VALUE）
     purity_arr   : (N,) purity [0,1]（bad は 0.0）
     recovery_arr : (N,) recovery [0,1]（bad は 0.0）
@@ -189,6 +203,7 @@ def _evaluate_batch_multi(
         x_cont = [float(v) for v in x_np[i, n_bin:]]
         groups[key].append((i, x_cont))
 
+    objectives = np.empty(N, dtype=np.float64)
     energies   = np.empty(N, dtype=np.float64)
     purities   = np.empty(N, dtype=np.float64)
     recoveries = np.empty(N, dtype=np.float64)
@@ -224,14 +239,20 @@ def _evaluate_batch_multi(
                 if recovered:
                     print(f"  [CBO] retry recovered {recovered}/{len(bad_pos)} bad eval(s) "
                           f"(transient wedge)")
-        for (i, _), m in zip(items, metrics_list):
+        for (i, x_cont), m in zip(items, metrics_list):
             is_bad = m.specific_energy >= BAD_VALUE
             energies[i]   = BAD_VALUE if is_bad else float(m.specific_energy)
             purities[i]   = 0.0       if is_bad else float(m.purity)
             recoveries[i] = 0.0       if is_bad else float(m.recovery)
             valids[i]     = not is_bad
+            if is_bad:
+                objectives[i] = BAD_VALUE
+            elif objective_fn is None:
+                objectives[i] = float(m.specific_energy)
+            else:
+                objectives[i] = float(objective_fn(m, x_cont, topology))
 
-    return energies, purities, recoveries, valids, n_evals
+    return objectives, energies, purities, recoveries, valids, n_evals
 
 
 def _select_device() -> torch.device:
@@ -333,7 +354,9 @@ def run_bo(
 
     ga.run_ga と同一シグネチャ。run_iteration.py から optimizer フラグで切り替えて呼ぶ。
 
-    目的：energy（specific_energy_kWh_tCO2）を最小化
+    目的：energy（specific_energy_kWh_tCO2）を最小化。
+          case.yaml の optimization_targets.objective が "minimize_cost" のときは
+          年間換算回収コスト [$/tCO2]（evaluator.cost_per_tco2、12.2）を最小化
     制約：purity ≥ purity_min, recovery ≥ recovery_min（case.yaml から）
 
     Returns
@@ -355,7 +378,22 @@ def run_bo(
     targets      = case["optimization_targets"]
     purity_min   = float(targets["purity_min"])
     recovery_min = float(targets["recovery_min"])
-    penalty_w    = float(case.get("penalty_weight", 1e5))  # ロギング fitness 用のみ
+
+    # ---- 目的の切替（12.2）: energy（従来） / cost（$/tCO2）----
+    # cost モードでは第2相 CEI の目的 outcome・best 選択・ロギング fitness がすべて
+    # cost 軸になる。第1相（bootstrap＝制約不足量の最小化）は目的に依らず不変。
+    cost_mode = str(targets.get("objective", "")).strip() == "minimize_cost"
+    if cost_mode:
+        econ = {**ECONOMICS_DEFAULTS, **(case.get("economics") or {})}
+        penalty_w = float(econ["penalty_weight"])   # コスト（<100 $/tCO2）スケールの λ（Lee の r）
+
+        def objective_fn(m: Metrics, x_cont: list[float], topology: dict) -> float:
+            areas = membrane_areas_from_x(x_cont, cont_vars, topology)
+            return cost_per_tco2(m, areas, case)
+    else:
+        penalty_w = float(case.get("penalty_weight", 1e5))  # ロギング fitness 用のみ
+        objective_fn = None
+
     bo_cfg       = {**_BO_DEFAULTS, **case.get("bo", {})}
     n_init       = int(bo_cfg["n_init"])
     n_iter       = int(bo_cfg["n_iter"])
@@ -390,19 +428,20 @@ def run_bo(
           f"fixed_features={len(fixed_features_list)}/{2**n_bin} (unbuildable excluded), "
           f"bootstrap={'shortfall' if bootstrap_on else 'off'}, retry_bad={retry_bad}, "
           f"log_scale={log_scaled_names if log_scaled_names else 'off'}, "
+          f"objective={'cost($/tCO2)' if cost_mode else 'energy(kWh/tCO2)'}, "
           f"constraints: purity≥{purity_min}, recovery≥{recovery_min}")
 
     # ----- 1. Sobol 初期サンプル -----
     # train_x_np は内部表現（log 対象列は log 空間＝log-uniform サンプリングになる）
     train_x_np = _sobol_initial(n_init, bounds, n_bin, seed).detach().cpu().numpy()
-    e_arr, p_arr, r_arr, v_mask, n_evals = _evaluate_batch_multi(
+    o_arr, e_arr, p_arr, r_arr, v_mask, n_evals = _evaluate_batch_multi(
         _to_eval_space(train_x_np, log_mask), ss, bin_vars, cont_vars, n_bin, evaluator,
-        retry_bad=retry_bad
+        retry_bad=retry_bad, objective_fn=objective_fn
     )
 
-    # 全観測を tensor へ（GP には energy クリップ版を渡す、ロギング fitness は raw を使う）
+    # 全観測を tensor へ（GP には目的値クリップ版を渡す、ロギング fitness は raw を使う）
     all_x = torch.tensor(train_x_np, dtype=dtype, device=device)
-    all_e_raw = e_arr.copy()
+    all_o_raw = o_arr.copy()   # 目的値（energy または cost）
     all_p_raw = p_arr.copy()
     all_r_raw = r_arr.copy()
     all_v = v_mask.copy()
@@ -412,7 +451,7 @@ def run_bo(
     objective = LinearMCObjective(weights=torch.tensor([1.0, 0.0, 0.0], dtype=dtype, device=device))
 
     for it in range(n_iter):
-        e_capped = _clip_bad_energy(all_e_raw, all_v)
+        o_capped = _clip_bad_energy(all_o_raw, all_v)   # 目的値（energy/cost 共通のクリップ）
         feasible_mask = (all_p_raw >= purity_min) & (all_r_raw >= recovery_min) & all_v
 
         # ---- 二相切替（run22 の教訓・2026-07-08）----
@@ -444,25 +483,25 @@ def run_bo(
                 )
                 acqf = qLogExpectedImprovement(model=gp_s, best_f=best_f_tensor)
             else:
-                # ---- 第2相: Constrained EI（feasible 領域内でエネルギーを削る）----
-                # GP fit（energy は最小化なので符号反転して max 化、bad は cap で infeasible 学習）
-                train_e = torch.tensor(-e_capped, dtype=dtype, device=device).unsqueeze(-1)
+                # ---- 第2相: Constrained EI（feasible 領域内で目的値を削る）----
+                # GP fit（目的値は最小化なので符号反転して max 化、bad は cap で infeasible 学習）
+                train_o = torch.tensor(-o_capped, dtype=dtype, device=device).unsqueeze(-1)
                 train_p = torch.tensor(all_p_raw,  dtype=dtype, device=device).unsqueeze(-1)
                 train_r = torch.tensor(all_r_raw,  dtype=dtype, device=device).unsqueeze(-1)
 
-                gp_e = _make_gp(all_x, train_e, n_bin, cat_dims, bounds, d)
+                gp_o = _make_gp(all_x, train_o, n_bin, cat_dims, bounds, d)
                 gp_p = _make_gp(all_x, train_p, n_bin, cat_dims, bounds, d)
                 gp_r = _make_gp(all_x, train_r, n_bin, cat_dims, bounds, d)
-                model = ModelListGP(gp_e, gp_p, gp_r)
+                model = ModelListGP(gp_o, gp_p, gp_r)
                 mll = SumMarginalLogLikelihood(model.likelihood, model)
                 fit_gpytorch_mll(mll)
 
-                # best_f: feasible 観測のうち energy（-値）最大＝energy 最小。
+                # best_f: feasible 観測のうち目的値（-値）最大＝目的値最小。
                 # （bootstrap="off" の全 infeasible 時のみ旧来の「最悪未満」经路に入る）
                 if feasible_mask.any():
-                    best_f = float(-e_capped[feasible_mask].min())  # = max(-energy)
+                    best_f = float(-o_capped[feasible_mask].min())  # = max(-objective)
                 else:
-                    best_f = float(-e_capped.max() - 1.0)  # 最悪より下＝改善余地あり扱い
+                    best_f = float(-o_capped.max() - 1.0)  # 最悪より下＝改善余地あり扱い
                 best_f_tensor = torch.tensor(best_f, dtype=dtype, device=device)
 
                 # acqf: Constrained EI（制約は ≤0 で feasible の規約）
@@ -494,32 +533,32 @@ def run_bo(
 
         # 評価（candidates は内部表現なので実スケールへ戻して渡す）
         c_np = candidates.detach().cpu().numpy()
-        new_e, new_p, new_r, new_v, n_new = _evaluate_batch_multi(
+        new_o, new_e, new_p, new_r, new_v, n_new = _evaluate_batch_multi(
             _to_eval_space(c_np, log_mask), ss, bin_vars, cont_vars, n_bin, evaluator,
-            retry_bad=retry_bad
+            retry_bad=retry_bad, objective_fn=objective_fn
         )
 
         # 観測を蓄積
         all_x     = torch.cat([all_x, candidates], dim=0)
-        all_e_raw = np.concatenate([all_e_raw, new_e])
+        all_o_raw = np.concatenate([all_o_raw, new_o])
         all_p_raw = np.concatenate([all_p_raw, new_p])
         all_r_raw = np.concatenate([all_r_raw, new_r])
         all_v     = np.concatenate([all_v,     new_v])
         n_evals  += n_new
 
-        # ロギング: 全観測のうち最良の penalty 込み fitness（互換用）
+        # ロギング: 全観測のうち最良の penalty 込み fitness（互換用。目的値ベース）
         all_fitness = np.array([
-            _fitness(Metrics(specific_energy=e, purity=p, recovery=r), targets, penalty_w)
-            for e, p, r in zip(all_e_raw, all_p_raw, all_r_raw)
+            _fitness(o, p, r, targets, penalty_w)
+            for o, p, r in zip(all_o_raw, all_p_raw, all_r_raw)
         ])
         best_fit_log = float(all_fitness.min())
         # phase は SST エージェント・分析用の診断情報（bootstrap=制約探索中 / cei=feasible 圏内）
         gen_log.append({"gen": it + 1, "best_fitness": best_fit_log, "phase": phase})
 
-        # 進捗表示: best fitness と、feasible best energy（あれば）の両方
+        # 進捗表示: best fitness と、feasible best 目的値（あれば）の両方
         if feasible_mask.any():
-            fe_min = float(e_capped[feasible_mask].min())
-            print(f"  Iter {it+1:2d} [{phase}]: best_fit={best_fit_log:.1f}  feasible_E_min={fe_min:.1f}")
+            fo_min = float(o_capped[feasible_mask].min())
+            print(f"  Iter {it+1:2d} [{phase}]: best_fit={best_fit_log:.1f}  feasible_obj_min={fo_min:.1f}")
         else:
             min_short = float((
                 np.maximum(0.0, purity_min   - all_p_raw)
@@ -530,7 +569,7 @@ def run_bo(
 
     # ----- 5. best 個体を選んで DEAP Individual 互換 list で返す -----
     # CBO は constraint satisfaction を優先する設計なので、feasible 観測があれば
-    # その中で energy 最小を返す（infeasible 良点を選ぶと SST 判定軸に反する）。
+    # その中で目的値（energy/cost）最小を返す（infeasible 良点を選ぶと SST 判定軸に反する）。
     # 全 infeasible のときは bootstrap 相の探索軸と返却軸を揃えて min-shortfall の
     # 観測を返す（12.5(a)。run23 iter_004: 探索が踏んだ shortfall 0.014 の点が
     # 旧 penalty-min 選択で埋もれ 0.063 が記録された）。同率は penalty 込み fitness
@@ -538,12 +577,12 @@ def run_bo(
     # bootstrap: off のときのみ旧来の penalty-min フォールバック。
     final_feasible_mask = (all_p_raw >= purity_min) & (all_r_raw >= recovery_min) & all_v
     if final_feasible_mask.any():
-        energy_for_select = np.where(final_feasible_mask, all_e_raw, np.inf)
-        best_idx = int(np.argmin(energy_for_select))
+        objective_for_select = np.where(final_feasible_mask, all_o_raw, np.inf)
+        best_idx = int(np.argmin(objective_for_select))
     else:
         all_fitness = np.array([
-            _fitness(Metrics(specific_energy=e, purity=p, recovery=r), targets, penalty_w)
-            for e, p, r in zip(all_e_raw, all_p_raw, all_r_raw)
+            _fitness(o, p, r, targets, penalty_w)
+            for o, p, r in zip(all_o_raw, all_p_raw, all_r_raw)
         ])
         if bootstrap_on:
             # bad 観測は purity=0/recovery=0 で shortfall 最大に落ち、valid と同率の

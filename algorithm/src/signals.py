@@ -78,6 +78,7 @@ class ConstraintViolation:
 class Signals:
     iteration: int
     specific_energy: float
+    cost_per_tco2: float | None = None   # $/tCO2（12.2。旧 results には無いので Optional）
     bounds_hit: list[BoundsHit] = field(default_factory=list)
     energy_blocks: list[EnergyBlock] = field(default_factory=list)
     residue_losses: list[ResidueLoss] = field(default_factory=list)
@@ -196,9 +197,11 @@ def extract_constraint_violation(results: dict, case: dict) -> ConstraintViolati
 
 def extract(results: dict, ss: dict, case: dict) -> Signals:
     """results.json + ss + case から Signals を組み立てる。"""
+    _cost = results.get("performance", {}).get("cost_usd_per_tCO2")
     return Signals(
         iteration=int(results.get("iteration", 0)),
         specific_energy=float(results.get("performance", {}).get("specific_energy_kWh_tCO2", 0.0)),
+        cost_per_tco2=float(_cost) if isinstance(_cost, (int, float)) else None,
         bounds_hit=extract_bounds_hit(results, ss, case.get("membrane_model")),
         energy_blocks=extract_energy_blocks(results),
         residue_losses=extract_residue_losses(results, ss),
@@ -226,6 +229,8 @@ def summarize(sig: Signals) -> str:
         lines.append(f"  CO2 recovery:      {cv.recovery*100:.1f}%   "
                      f"(target {cv.recovery_min*100:.1f}%, {recovery_mark})")
         lines.append(f"  Specific energy:   {sig.specific_energy:.1f} kWh/tCO2")
+        if sig.cost_per_tco2 is not None:
+            lines.append(f"  Capture cost:      {sig.cost_per_tco2:.2f} $/tCO2")
 
     lines.append("")
     lines.append("Energy blocks (share desc):")

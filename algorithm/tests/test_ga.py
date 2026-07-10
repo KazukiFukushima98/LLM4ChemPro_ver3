@@ -71,5 +71,37 @@ class TestGAXAlignmentWithPruning(unittest.TestCase):
         self.assertEqual(len(gen_log), 3)
 
 
+class TestGACostObjective(unittest.TestCase):
+    """12.2: objective=minimize_cost で GA の fitness がコスト軸で回り完走する。"""
+
+    def test_cost_mode_completes(self) -> None:
+        from ga import run_ga
+
+        class _FeasibleMock:
+            def evaluate_topology(self, topology, x_list):
+                return [
+                    Metrics(specific_energy=300.0, purity=0.96, recovery=0.92,
+                            energy_breakdown={"VP1": 100.0})
+                    for _ in x_list
+                ]
+
+            def evaluate_detailed(self, topology, x):
+                return DetailedResult(metrics=self.evaluate_topology(topology, [x])[0])
+
+        ss = make_bypass_toggle_ss()
+        case = {
+            "optimization_targets": {"purity_min": 0.9, "recovery_min": 0.7,
+                                     "objective": "minimize_cost"},
+            "feed": {"flowbase": "MASS", "basis": "MOLE-FRAC",
+                     "totflow": 2440000.0, "co2_frac": 0.15},
+            "ga": {"pop_size": 6, "n_gen": 2},
+        }
+        with redirect_stdout(io.StringIO()):
+            best, gen_log, n_evals = run_ga(ss, case, _FeasibleMock(), seed=7)
+        self.assertEqual(len(gen_log), 2)
+        # コストスケール（数十 $/t）＋ penalty なし → fitness は BAD ではなく小さい値
+        self.assertLess(gen_log[-1]["best_fitness"], 1000.0)
+
+
 if __name__ == "__main__":
     unittest.main()

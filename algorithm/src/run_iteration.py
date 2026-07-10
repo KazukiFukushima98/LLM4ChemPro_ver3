@@ -24,7 +24,13 @@ import yaml
 sys.path.insert(0, os.path.dirname(__file__))
 import signals as sig_mod  # noqa: E402
 import topology as T  # noqa: E402
-from evaluator import BAD_VALUE, DetailedResult, Metrics  # noqa: E402
+from evaluator import (  # noqa: E402
+    BAD_VALUE,
+    DetailedResult,
+    Metrics,
+    cost_per_tco2,
+    membrane_areas_from_x,
+)
 from ga import run_ga  # noqa: E402
 from subprocess_evaluator import SubprocessEvaluator, _default_kill_aspen  # noqa: E402
 from topology import (  # noqa: E402
@@ -87,14 +93,17 @@ def build_results_dict(
     n_evals: int,
     optimizer: str = "ga",
     seed: int | None = None,
-    membrane_model: dict | None = None,
+    case: dict | None = None,
 ) -> dict:
     """ARCH 3.7 の results.json スキーマに沿った辞書を組み立てる。
 
     optimizer / seed は再現性のための記録（どの最適化器がどの乱数で出した結果か。
     seed=iter番号はディレクトリ状態に依存してドリフトし得るため、値そのものを残す）。
-    membrane_model（12.1）は permeance 変数の命名・次元を GA/BO 側と揃えるために必要。
+    case を渡すと (1) membrane_model による permeance 変数の命名・次元を GA/BO 側と
+    揃え、(2) performance に cost_usd_per_tCO2 を記録する（12.2。objective 設定に
+    依らず energy と cost の両方を常時記録＝比較可能性の担保）。
     """
+    membrane_model = (case or {}).get("membrane_model")
     bin_vars  = binary_variables(ss)
     cont_vars = continuous_variables(ss, membrane_model)
     n_binary  = len(bin_vars)
@@ -105,16 +114,28 @@ def build_results_dict(
         optimal_params[cv["name"]] = float(best[n_binary + k])
 
     m = detailed.metrics
+    performance: dict[str, Any] = {
+        "CO2_purity":               m.purity,
+        "CO2_recovery":             m.recovery,
+        "specific_energy_kWh_tCO2": m.specific_energy,
+        "total_compressor_kW":      sum(m.energy_breakdown.values()),
+    }
+    if case is not None:
+        # 12.2: objective 設定に依らず cost を常時記録（energy との比較可能性）。
+        # 記録は付加情報なので、feed 形式非対応等で失敗しても反復は落とさない。
+        try:
+            topology_best = active_topology(ss, q_active)
+            x_cont = [float(best[n_binary + k]) for k in range(len(cont_vars))]
+            areas  = membrane_areas_from_x(x_cont, cont_vars, topology_best)
+            performance["cost_usd_per_tCO2"] = cost_per_tco2(m, areas, case)
+        except Exception as e:
+            print(f"    cost recording skipped: {e}")
+
     return {
         "iteration": iter_num,
         "optimizer": optimizer,
         "seed": seed,
-        "performance": {
-            "CO2_purity":               m.purity,
-            "CO2_recovery":             m.recovery,
-            "specific_energy_kWh_tCO2": m.specific_energy,
-            "total_compressor_kW":      sum(m.energy_breakdown.values()),
-        },
+        "performance": performance,
         "optimal_params":    optimal_params,
         "active_candidates": q_active,
         "stream_results":    detailed.stream_results,
@@ -177,9 +198,11 @@ def auto_commit_iteration(
         active_cands = results.get("active_candidates", {}) or {}
         active_cands_str = str(active_cands) if active_cands else "(none)"
 
+        cost = perf.get("cost_usd_per_tCO2")
+        cost_str = f" cost={cost:.1f}$/t" if isinstance(cost, (int, float)) else ""
         title = (
             f"{run_name} iter{iter_num:03d}: "
-            f"E={spec_e:.0f}kWh/tCO2 purity={purity:.1f}% recovery={recovery:.1f}%"
+            f"E={spec_e:.0f}kWh/tCO2{cost_str} purity={purity:.1f}% recovery={recovery:.1f}%"
         )
         body = (
             f"## Changes\n"
@@ -358,8 +381,7 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
     # results.json 書き出し（アトミック：外側ループの正本が途中クラッシュで壊れないように）
     results = build_results_dict(
         iter_num, best, ss, detailed, gen_log, n_evals,
-        optimizer=optimizer, seed=iter_num,
-        membrane_model=case.get("membrane_model"),
+        optimizer=optimizer, seed=iter_num, case=case,
     )
     results_path = os.path.join(iter_dir, "results.json")
     tmp_path = results_path + ".tmp"
@@ -381,6 +403,8 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
     print(f"  CO2 purity:       {perf['CO2_purity']*100:.1f}%")
     print(f"  CO2 recovery:     {perf['CO2_recovery']*100:.1f}%")
     print(f"  Specific energy:  {perf['specific_energy_kWh_tCO2']:.1f} kWh/tCO2")
+    if "cost_usd_per_tCO2" in perf:
+        print(f"  Capture cost:     {perf['cost_usd_per_tCO2']:.2f} $/tCO2")
     print(f"  Total compressor: {perf['total_compressor_kW']:.1f} kW")
     print(f"  Evaluations:      {n_evals}")
     print(f"  Saved to:         {iter_dir}/")

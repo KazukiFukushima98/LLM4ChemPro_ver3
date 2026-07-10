@@ -18,7 +18,14 @@ from deap import base, creator, tools
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from evaluator import BAD_VALUE, Evaluator, Metrics  # noqa: E402
+from evaluator import (  # noqa: E402
+    BAD_VALUE,
+    ECONOMICS_DEFAULTS,
+    Evaluator,
+    Metrics,
+    cost_per_tco2,
+    membrane_areas_from_x,
+)
 from topology import (  # noqa: E402
     active_topology,
     binary_variables,
@@ -28,15 +35,19 @@ from topology import (  # noqa: E402
 )
 
 
-def _fitness(m: Metrics, targets: dict, penalty_w: float) -> float:
-    """f = E + λ[max(0, π_min−π)² + max(0, ρ_min−ρ)²]"""
-    if m.specific_energy >= BAD_VALUE:
+def _fitness(obj_value: float, purity: float, recovery: float,
+             targets: dict, penalty_w: float) -> float:
+    """f = obj + λ[max(0, π_min−π)² + max(0, ρ_min−ρ)²]
+
+    obj は目的値（energy または cost。12.2 の objective 切替に追従）。
+    """
+    if obj_value >= BAD_VALUE:
         return BAD_VALUE
     penalty = (
-        penalty_w * max(0.0, targets["purity_min"]   - m.purity)   ** 2 +
-        penalty_w * max(0.0, targets["recovery_min"] - m.recovery) ** 2
+        penalty_w * max(0.0, targets["purity_min"]   - purity)   ** 2 +
+        penalty_w * max(0.0, targets["recovery_min"] - recovery) ** 2
     )
-    return m.specific_energy + penalty
+    return obj_value + penalty
 
 
 def run_ga(
@@ -69,7 +80,20 @@ def run_ga(
     pop_size  = ga_cfg["pop_size"]
     n_gen     = ga_cfg["n_gen"]
     targets   = case["optimization_targets"]
-    penalty_w = float(case.get("penalty_weight", 1e5))  # YAML 1.1 は指数符号なし(1.0e5)を str で返すため明示変換
+
+    # ---- 目的の切替（12.2）: energy（従来） / cost（$/tCO2）----
+    cost_mode = str(targets.get("objective", "")).strip() == "minimize_cost"
+    if cost_mode:
+        econ = {**ECONOMICS_DEFAULTS, **(case.get("economics") or {})}
+        penalty_w = float(econ["penalty_weight"])   # コストスケールの λ（Lee の r）
+    else:
+        penalty_w = float(case.get("penalty_weight", 1e5))  # YAML 1.1 は指数符号なし(1.0e5)を str で返すため明示変換
+
+    def _objective(m: Metrics, x_cont: list, topology: dict) -> float:
+        if not cost_mode or m.specific_energy >= BAD_VALUE:
+            return float(m.specific_energy)
+        areas = membrane_areas_from_x(x_cont, cont_vars, topology)
+        return cost_per_tco2(m, areas, case)
 
     bounds     = [[0.0, 1.0]] * n_binary + [cv["bounds"] for cv in cont_vars]
     sigma_cont = [(b[1] - b[0]) * 0.15 for b in [cv["bounds"] for cv in cont_vars]]
@@ -137,7 +161,8 @@ def run_ga(
                 ]
                 metrics_list = evaluator.evaluate_topology(topology, x_list)
             for ind, m in zip(inds, metrics_list):
-                ind.fitness.values = (_fitness(m, targets, penalty_w),)
+                obj = _objective(m, list(ind[n_binary:]), topology)
+                ind.fitness.values = (_fitness(obj, m.purity, m.recovery, targets, penalty_w),)
             total += len(inds)
         return total
 

@@ -20,11 +20,31 @@ optimization_targets:
   recovery_min: 0.90      # CO2 recovery lower bound（DOE 回収目標相当。0.70→0.90 へ引き上げ：
                           # 残渣 CO2 の回収が必須になり「巨大リサイクル vs 残渣側回収段」の
                           # 構造競争を誘発する＝3段が出得る系にする）
-  objective: minimize_specific_energy
+  objective: minimize_cost  # ver3 12.2: 年間換算回収コスト [$/tCO2] を最小化（economics: 参照）。
+                            # `minimize_specific_energy` に戻すと ver2 のエネルギー目的。
+                            # results.json にはどちらでも energy / cost の両方が記録される。
 
 penalty_weight: 100000.0  # PENALTY_W. Quadratic penalty on purity/recovery shortfall.
                           # 1.0e5 は PyYAML（YAML 1.1）で string になる（指数符号が必須）ため整数表記。
                           # CBO では獲得関数に使わずロギング fitness のみに影響。
+                          # 注: objective=minimize_cost では economics.penalty_weight（コスト
+                          # スケールの λ、Lee の r=1000）が代わりに使われる。
+
+# ver3 12.2: 経済定数（Lee et al. 2018 Table 1。人間管理）。
+# F_obj = (capital_charge · installation_factor · C_TCC) / (M_CO2 · t_op) + E·Ce + penalty
+# 熱交換器コスト（Chx）はフローシートに冷却器を持たないため省略（2026-07-10 決定）。
+# シミュレーションの圧縮機効率は Aspen Compr 既定のまま（同決定）。η は CAPEX 式のみ。
+economics:
+  membrane_cost: 50.0             # $/m2（モジュール・スキッド込み）
+  compressor_cost: 670.0          # $/kW
+  vacuum_pump_cost: 1341.0        # $/kW（auto-VP に適用）
+  expander_cost: 500.0            # $/kW（12.4 の膨張機実装後に効く。WNET<0 で判別）
+  installation_factor: 1.6        # f_in
+  capital_charge_rate: 0.2        # /y（年間資本賦課率 20%）
+  electricity_cost: 0.04          # $/kWh
+  operating_hours: 7446.0         # h/y（稼働率 85%）
+  pressure_unit_efficiency: 0.8   # η。CAPEX 式 C·W/η にのみ使用（Lee Eq.16）
+  penalty_weight: 1000.0          # コスト目的の shortfall² 係数（Lee の r）
 
 vp_outlet_pressure: 1.0   # bar. Auto-VP discharge pressure on each membrane permeate (fixed).
 
