@@ -91,6 +91,11 @@ UNIT_BOUNDS: dict[str, dict[str, list[float]]] = {
     # 膨張機（ver3 12.4）: GA 変数なし（出口圧は params.outlet_pressure 固定・既定 1 bar）。
     # 構造部品としてエージェントが高圧経路（昇圧後の残渣等）に配置し電力を回収する。
     "EXP": {},
+    # 冷却器/加熱器（ver3 12.4 検算で追加）: GA 変数なし（params.temperature [°C]・
+    # params.pressure は Aspen Heater の PRES 指定＝0 で圧力損失なし）。builder の
+    # _create_heater（ver1 由来・動作資産）を使う。圧縮後の高温ガスを膜運転温度へ
+    # 戻す中間冷却器として配置する（冷却水コストはモデル外＝HX 省略の決定と整合）。
+    "HEAT": {},
 }
 
 # 連続変数の宣言（GA 変数名の組み立てに使う）
@@ -103,6 +108,7 @@ _UNIT_GA_VARS: dict[str, list[dict[str, str]]] = {
         {"suffix": "pout", "param": "outlet_pressure"},
     ],
     "EXP": [],
+    "HEAT": [],
 }
 
 # 構造テンプレート（add_unit が出力頂点を生成するときに参照）
@@ -111,6 +117,7 @@ STRUCTURE_TEMPLATES: dict[str, dict[str, list[str]]] = {
     "MEMB": {"outlets": ["permeate", "retentate"]},
     "COMP": {"outlets": ["outlet"]},
     "EXP":  {"outlets": ["outlet"]},
+    "HEAT": {"outlets": ["outlet"]},
 }
 
 

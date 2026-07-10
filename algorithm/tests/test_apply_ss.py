@@ -158,6 +158,23 @@ class TestAddUnit(unittest.TestCase):
         self.assertNotIn("EXP1_pout", names)
         T.validate(new_ss)
 
+    def test_add_heater_two_arcs_per_port(self):
+        """HEAT（冷却器/加熱器）も COMP と同型（内部 heater + 後段 process）・GA 変数なし。"""
+        ss = load_seed()
+        change = {"operations": [
+            {"op": "add_unit", "unit_type": "HEAT", "unit": "HEAT1",
+             "inlet": "V2", "outlet_to": "V4",
+             "params": {"temperature": 35.0, "pressure": 0.0}}
+        ]}
+        new_ss = A.apply_change(ss, change)
+        self.assertNotIn(("V2", "V4"), new_ss["arcs"])
+        self.assertEqual(new_ss["arcs"][("V2", "V9")],
+                         {"type": "heater", "unit": "HEAT1"})
+        self.assertEqual(new_ss["arcs"][("V9", "V4")], {"type": "process"})
+        names = [cv["name"] for cv in T.continuous_variables(new_ss)]
+        self.assertEqual(len(names), 4)  # 膜2基×2 のみ（HEAT は変数を持たない）
+        T.validate(new_ss)
+
 
 # =========================================================
 # add_gated_unit（GA トグルとしてのユニット追加）

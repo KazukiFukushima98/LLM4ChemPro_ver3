@@ -41,6 +41,7 @@ INNER_ARC_TYPE: dict[str, dict[str, str]] = {
     "MEMB": {"permeate": "membrane_permeate", "retentate": "membrane_retentate"},
     "COMP": {"outlet": "compressor"},
     "EXP":  {"outlet": "expander"},   # 膨張機（ver3 12.4）
+    "HEAT": {"outlet": "heater"},     # 冷却器/加熱器（ver3 12.4 検算で追加）
 }
 
 

@@ -638,7 +638,8 @@ class TestUnitRegistry(unittest.TestCase):
         self.assertEqual(UR.get_unit_type("MEMB42"), "MEMB")
         self.assertEqual(UR.get_unit_type("COMP3"), "COMP")
         self.assertEqual(UR.get_unit_type("EXP1"), "EXP")
-        self.assertIsNone(UR.get_unit_type("HEATER1"))
+        self.assertEqual(UR.get_unit_type("HEAT1"), "HEAT")   # 冷却器/加熱器（12.4 検算で追加）
+        self.assertIsNone(UR.get_unit_type("PUMP1"))
 
     def test_expander_has_no_ga_variables(self):
         """膨張機（12.4）は GA 変数を持たない構造部品（membrane_model があっても不変）。"""
