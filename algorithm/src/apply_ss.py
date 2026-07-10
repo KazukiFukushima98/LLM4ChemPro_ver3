@@ -419,10 +419,23 @@ def apply_change(ss: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
     history への append と iteration の +1 もここで行う。
     validate は呼ばない（main / apply_from_files 側で行う）。
     """
+    # スキーマガード（run24 iter_001 の実事故対策）: エージェントが "changes" 等の
+    # 誤ったトップレベルキーで書くと、旧実装は「0操作の空適用」を黙って成功させ、
+    # 気づかないまま同じ SS で次の反復（数時間）を走らせてしまう。operations が
+    # 無い・空・リストでない場合は明示的に失敗させる。
+    ops = change.get("operations")
+    if not isinstance(ops, list) or not ops:
+        raise ApplyError(
+            "ss_change に operations（非空リスト）がありません。"
+            f"トップレベルキー: {sorted(change.keys())}。"
+            "正しいスキーマは {\"reason\": ..., \"operations\": [...]}"
+            "（ARCHITECTURE 6.2）"
+        )
+
     new_ss = copy.deepcopy(ss)
     new_ss["iteration"] = ss.get("iteration", 0) + 1
 
-    for i, op in enumerate(change.get("operations", [])):
+    for i, op in enumerate(ops):
         name = op.get("op")
         handler = OP_HANDLERS.get(name)
         if handler is None:

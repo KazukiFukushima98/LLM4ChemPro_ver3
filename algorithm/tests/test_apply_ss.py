@@ -109,6 +109,22 @@ class TestAddUnit(unittest.TestCase):
         with self.assertRaisesRegex(ApplyError, "retentate_to"):
             A.apply_change(ss, change)
 
+    def test_missing_operations_key_raises(self):
+        """operations が無い ss_change（例: 誤って "changes" キー）は空適用せず明示エラー。
+
+        run24 iter_001 の実事故: エージェントが {"changes": [...]} で書き、旧実装が
+        0操作の空適用を黙って成功させた（スキーマガードの回帰テスト）。
+        """
+        ss = load_seed()
+        with self.assertRaisesRegex(ApplyError, "operations"):
+            A.apply_change(ss, {"reason": "x", "changes": [
+                {"op": "delete_unit", "unit": "MEMB2"}]})
+
+    def test_empty_operations_raises(self):
+        ss = load_seed()
+        with self.assertRaisesRegex(ApplyError, "operations"):
+            A.apply_change(ss, {"reason": "x", "operations": []})
+
     def test_add_unit_inlet_not_in_vertices_raises(self):
         ss = load_seed()
         change = {"operations": [
