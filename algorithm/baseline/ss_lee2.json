@@ -1,0 +1,62 @@
+{
+  "iteration": 0,
+  "vertices": {
+    "V0": {"role": "feed",     "label": "Feed (CO2 15%, post-combustion)"},
+    "V1": {"role": "internal", "label": "M1 inlet mixer (F1)"},
+    "V2": {"role": "internal", "label": "M1 permeate (after VP1)"},
+    "V3": {"role": "internal", "label": "M1 retentate"},
+    "V4": {"role": "internal", "label": "M2 inlet mixer (F2)"},
+    "V5": {"role": "internal", "label": "M2 permeate (after VP2)"},
+    "V6": {"role": "internal", "label": "M2 retentate"},
+    "V7": {"role": "product",  "label": "Product collector (P)"},
+    "V8": {"role": "residue",  "label": "Residue collector (R)"}
+  },
+  "arcs": [
+    {"from": "V0", "to": "V1", "type": "feed"},
+    {"from": "V1", "to": "V2", "type": "membrane_permeate",  "unit": "MEMB1"},
+    {"from": "V1", "to": "V3", "type": "membrane_retentate", "unit": "MEMB1"},
+    {"from": "V4", "to": "V5", "type": "membrane_permeate",  "unit": "MEMB2"},
+    {"from": "V4", "to": "V6", "type": "membrane_retentate", "unit": "MEMB2"},
+
+    {"from": "V2", "to": "V1", "type": "recycle", "candidate": "q_1"},
+    {"from": "V2", "to": "V4", "type": "recycle", "candidate": "q_2"},
+    {"from": "V2", "to": "V7", "type": "product", "candidate": "q_3"},
+
+    {"from": "V3", "to": "V1", "type": "recycle", "candidate": "q_4"},
+    {"from": "V3", "to": "V4", "type": "recycle", "candidate": "q_5"},
+    {"from": "V3", "to": "V8", "type": "residue", "candidate": "q_6"},
+
+    {"from": "V5", "to": "V1", "type": "recycle", "candidate": "q_7"},
+    {"from": "V5", "to": "V4", "type": "recycle", "candidate": "q_8"},
+    {"from": "V5", "to": "V7", "type": "product", "candidate": "q_9"},
+
+    {"from": "V6", "to": "V1", "type": "recycle", "candidate": "q_10"},
+    {"from": "V6", "to": "V4", "type": "recycle", "candidate": "q_11"},
+    {"from": "V6", "to": "V8", "type": "residue", "candidate": "q_12"}
+  ],
+  "units": {
+    "MEMB1": {
+      "type": "MEMB",
+      "inlet": "V1",
+      "outlets": {"permeate": "V2", "retentate": "V3"},
+      "params": {
+        "permeance_CO2": 2.70677,
+        "permeance_N2": 0.0541354,
+        "area": 500000.0,
+        "p_permeate": 0.2
+      }
+    },
+    "MEMB2": {
+      "type": "MEMB",
+      "inlet": "V4",
+      "outlets": {"permeate": "V5", "retentate": "V6"},
+      "params": {
+        "permeance_CO2": 2.70677,
+        "permeance_N2": 0.0541354,
+        "area": 500000.0,
+        "p_permeate": 0.2
+      }
+    }
+  },
+  "history": []
+}
