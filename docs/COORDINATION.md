@@ -30,7 +30,14 @@ ver2（完成・`v2.0-complete`）の追跡ツリーを継承して本リポジ�
 
 ### 実装キュー（残り）
 
-1. **run24 開始**（`algorithm/` でセッションを開き `/sst-loop runs/run24 <max_iter>`）→ **12.6 ablation**
+1. **run24 完了（2026-07-11）**：SST が5膜カスケードを自律発見し feasible 達成
+   （purity 0.998 / recovery 0.9014 / 73.66 $/t）。詳細は `docs/experiment_log.md` と
+   `algorithm/runs/run24/HANDOFF.md`。
+2. **次の判断（人間・HANDOFF の提案順）**：
+   (a) アクティブ制約近傍の BO 分散対策（n_init/n_iter 増 or feasibility 重み付け獲得関数）
+   (b) feed 昇圧アーキテクチャの seed/指示設計（リサイクル毎の再昇圧 COMP 込み。最大のコストレバー）
+   (c) 純度過剰達成（0.998 vs 0.95）の解消によるコスト回収
+3. **12.6 ablation**（3段全結合 vs SST／tie vs 段別）— 全結合 seed の人間承認待ち
 
 （済 2026-07-10：12.5(c) フェーズ対応 patience `057444b`／12.4 Mixer PRES=0＋膨張機 EXP
 `3111236`（実機 smoke 済み）／feed 基準の実測確定＝TOTFLOW はモル kmol/h `9925e10`／
