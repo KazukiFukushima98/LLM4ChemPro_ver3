@@ -210,7 +210,9 @@ def run_ga_onehot(
                 mut["fit"] = None
 
         invalid = [ind for ind in offspring if ind["fit"] is None]
+        _t_eval0 = time.monotonic()
         n_evals += evaluate(invalid)
+        t_eval_sec = round(time.monotonic() - _t_eval0, 2)   # この世代の評価実時間
 
         pop = offspring
         gen_best = min(pop, key=lambda i: i["fit"])
@@ -222,7 +224,8 @@ def run_ga_onehot(
         pop[worst_idx] = clone(best)
         best_fit = min(ind["fit"] for ind in pop if ind["fit"] is not None)
         gen_log.append({"gen": gen + 1, "best_fitness": best_fit,
-                        "t": round(time.monotonic() - t0, 1)})
+                        "t": round(time.monotonic() - t0, 1),
+                        "t_eval": t_eval_sec})
         print(f"  Gen {gen+1:2d}: best={best_fit:.1f}")
 
     # run_ga 互換のフル染色体（0/1 バイナリ + 連続）で返す

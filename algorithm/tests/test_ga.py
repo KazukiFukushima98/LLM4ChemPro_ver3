@@ -72,6 +72,9 @@ class TestGAXAlignmentWithPruning(unittest.TestCase):
         # 計測フィールド "t"（経過秒）が単調非減少で付いている
         ts = [g["t"] for g in gen_log]
         self.assertTrue(all(b >= a for a, b in zip(ts, ts[1:])), ts)
+        # 各世代の評価実時間 t_eval（非負）
+        for g in gen_log:
+            self.assertGreaterEqual(g["t_eval"], 0.0)
 
 
 class TestGACostObjective(unittest.TestCase):

@@ -433,6 +433,13 @@ class TestPatienceIntegration(unittest.TestCase):
         # 計測フィールド "t"（経過秒）が単調非減少で付いている
         ts = [g["t"] for g in gen_log]
         self.assertTrue(all(b >= a for a, b in zip(ts, ts[1:])), ts)
+        # 内訳計時: 各反復に t_fit / t_acq / t_eval（非負）、初回に t_init_eval
+        for g in gen_log:
+            for k in ("t_fit", "t_acq", "t_eval"):
+                self.assertIn(k, g)
+                self.assertGreaterEqual(g[k], 0.0)
+        self.assertIn("t_init_eval", gen_log[0])
+        self.assertGreaterEqual(gen_log[0]["t_init_eval"], 0.0)
 
 
 class TestCostObjective(unittest.TestCase):

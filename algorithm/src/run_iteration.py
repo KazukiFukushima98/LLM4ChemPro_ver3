@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from typing import Any
 
@@ -365,14 +366,17 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
     # 内側ループ駆動。評価はプロセス隔離（SubprocessEvaluator）。親は COM を触らないため
     # out-of-band watchdog は不要——親の stall 監視（最後の結果受信からの経過）が全カバーする。
     evaluator = SubprocessEvaluator(case, ASPEN_FILE, DMP_DIR)
+    _t_inner0 = time.monotonic()
     if optimizer == "bo":
         from bo import run_bo  # 遅延 import: GA 既定経路では torch/botorch を読み込まない
         best, gen_log, n_evals = run_bo(ss, case, evaluator, seed=iter_num)
     else:
         best, gen_log, n_evals = run_ga(ss, case, evaluator, seed=iter_num)
+    inner_opt_sec = round(time.monotonic() - _t_inner0, 1)
 
     # best の詳細評価（stream_results 込み）
     print("\n[3] Evaluating best solution (detailed)...")
+    _t_detail0 = time.monotonic()
     n_binary = len(bin_vars)
     q_active = {bv["name"]: int(best[k] > 0.5) for k, bv in enumerate(bin_vars)}
     topology_best = active_topology(ss, q_active)
@@ -387,6 +391,7 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
         # pruning 後トポロジーの変数だけに絞る（evaluator の位置 zip との整列）
         x_best_topo = x_for_topology(x_best, cont_vars, topology_best)
         detailed = evaluate_detailed_with_retry(evaluator, topology_best, x_best_topo)
+    detailed_sec = round(time.monotonic() - _t_detail0, 1)
 
     # 反復の評価がすべて終わったので、残留 AspenPlus.exe を回収する（次の評価までの
     # 外側ループ思考中にメモリ・ライセンスを占有し続けるのを防ぐ。逐次評価＝同時1個の
@@ -398,6 +403,18 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
         iter_num, best, ss, detailed, gen_log, n_evals,
         optimizer=optimizer, seed=iter_num, case=case,
     )
+    # 計測（2026-07-15）: 実時間の内訳。gen_log 側の t/t_fit/t_acq/t_eval と合わせて
+    # 「Aspen vs 最適化オーバーヘッド」「wedge 損失」を後段の分析で分離できる。
+    groups = evaluator.timing["groups"]
+    results["timing"] = {
+        "inner_opt_sec": inner_opt_sec,     # 内側最適化（run_bo/run_ga）全体
+        "detailed_sec": detailed_sec,       # best の詳細評価（リトライ込み）
+        "eval_wall_sec": round(sum(g["wall_sec"] for g in groups), 1),   # Aspen 評価の総壁時計
+        "n_eval_groups": len(groups),
+        "n_wedges": sum(1 for g in groups if g["wedged"]),
+        "wedge_lost_sec": round(sum(g["lost_sec"] for g in groups), 1),  # wedge/異常で失った時間
+        "evaluator_groups": groups,         # グループ別詳細（評価1件ごとの受信間隔 eval_sec 含む）
+    }
     results_path = os.path.join(iter_dir, "results.json")
     tmp_path = results_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:

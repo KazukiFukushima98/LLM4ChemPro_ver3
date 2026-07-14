@@ -108,6 +108,43 @@ class TestSubprocessEvaluatorTopology(unittest.TestCase):
         self.assertGreaterEqual(rec.calls, 1)
 
 
+class TestTimingRecords(unittest.TestCase):
+    """計測（timing）: record-only の実時間記録が評価結果と整合すること。"""
+
+    def test_normal_group_recorded(self):
+        rec = _KillRecorder()
+        ev = _make_evaluator("normal", rec)
+        ev.evaluate_topology(TOPO, [[0.0]] * 4)
+        self.assertEqual(len(ev.timing["groups"]), 1)
+        g = ev.timing["groups"][0]
+        self.assertEqual(g["mode"], "topology")
+        self.assertEqual(g["n_requested"], 4)
+        self.assertEqual(g["n_results"], 4)
+        self.assertFalse(g["wedged"])
+        self.assertEqual(len(g["eval_sec"]), 4)
+        self.assertTrue(all(s >= 0.0 for s in g["eval_sec"]))
+        self.assertEqual(g["lost_sec"], 0.0)
+        self.assertGreaterEqual(g["wall_sec"], 0.0)
+
+    def test_wedge_group_records_lost_time(self):
+        rec = _KillRecorder()
+        ev = _make_evaluator("partial_hang", rec)
+        ev.evaluate_topology(TOPO, [[0.0]] * 4)
+        g = ev.timing["groups"][0]
+        self.assertTrue(g["wedged"])
+        self.assertEqual(g["n_results"], 2)
+        self.assertEqual(len(g["eval_sec"]), 2)
+        # 失った時間 ≈ stall_sec（5s）以上（最後の受信から kill まで）
+        self.assertGreaterEqual(g["lost_sec"], 4.0)
+
+    def test_groups_accumulate_across_calls(self):
+        rec = _KillRecorder()
+        ev = _make_evaluator("normal", rec)
+        ev.evaluate_topology(TOPO, [[0.0]] * 2)
+        ev.evaluate_topology(TOPO, [[0.0]] * 3)
+        self.assertEqual([g["n_requested"] for g in ev.timing["groups"]], [2, 3])
+
+
 class TestSubprocessEvaluatorDetailed(unittest.TestCase):
     def test_detailed_normal(self):
         """detailed ハッピーパス：metrics は canned。"""

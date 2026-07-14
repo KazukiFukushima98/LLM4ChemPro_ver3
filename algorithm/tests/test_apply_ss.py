@@ -649,6 +649,21 @@ class TestSetBounds(unittest.TestCase):
         area_var = next(v for v in gv if v["name"] == "MEMB1_area")
         self.assertEqual(area_var["bounds"], [200.0, 100000.0])
 
+    def test_bounds_override_equal_lo_hi_fixes_param(self):
+        """lo==hi の bounds_override は GA 変数から除外＝固定パラメータ（2026-07-15）。
+
+        run26 の「feed 昇圧なし（pout=1.1 bar 固定）」で使う。値は params 側が担う。
+        """
+        ss = load_seed()
+        ss["units"]["COMP1"]["bounds_override"] = {"outlet_pressure": [1.1, 1.1]}
+        ss["units"]["COMP1"]["params"]["outlet_pressure"] = 1.1
+        gv = UR.make_ga_variables("COMP1", ss["units"]["COMP1"])
+        self.assertEqual(gv, [])  # COMP1_pout が消える
+        # SS 全体でも COMP1_pout が変数に現れない（膜の変数は不変）
+        names = [cv["name"] for cv in T.continuous_variables(ss)]
+        self.assertNotIn("COMP1_pout", names)
+        self.assertIn("MEMB1_area", names)
+
     def test_set_bounds_unknown_unit_raises(self):
         ss = load_seed()
         change = {"operations": [

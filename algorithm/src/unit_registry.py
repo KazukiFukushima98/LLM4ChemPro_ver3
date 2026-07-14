@@ -168,6 +168,12 @@ def make_ga_variables(
     for spec in _UNIT_GA_VARS[unit_type]:
         param = spec["param"]
         bounds = overrides.get(param, UNIT_BOUNDS[unit_type][param])
+        if bounds[0] == bounds[1]:
+            # 固定パラメータ（2026-07-15）: bounds_override を lo==hi にすると
+            # GA/BO 変数から除外される（値は units[name].params の固定値が担う。
+            # seed 側で params にも同じ値を書くこと）。ゼロ幅次元を BO の正規化に
+            # 渡さないための正攻法。run26 の「feed 昇圧なし＝pout 1.1 bar 固定」で使用。
+            continue
         variables.append({
             "name":       f"{unit_name}_{spec['suffix']}",
             "unit_param": [unit_name, param],

@@ -157,6 +157,9 @@ class TestGAOnehot(unittest.TestCase):
         self.assertGreaterEqual(n_evals, 8)
         ts = [g["t"] for g in gen_log]
         self.assertTrue(all(b >= a for a, b in zip(ts, ts[1:])), ts)
+        # 各世代の評価実時間 t_eval（非負）
+        for g in gen_log:
+            self.assertGreaterEqual(g["t_eval"], 0.0)
         # 連続部が bounds 内
         for v, cv in zip(best[n_bin:], T.continuous_variables(ss, _MM)):
             lo, hi = cv["bounds"]

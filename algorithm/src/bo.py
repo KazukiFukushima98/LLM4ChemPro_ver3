@@ -488,10 +488,12 @@ def run_bo(
     # ----- 1. Sobol 初期サンプル -----
     # train_x_np は内部表現（log 対象列は log 空間＝log-uniform サンプリングになる）
     train_x_np = _sobol_initial(n_init, bounds, n_bin, seed).detach().cpu().numpy()
+    _t_init0 = time.monotonic()
     o_arr, e_arr, p_arr, r_arr, v_mask, n_evals = _evaluate_batch_multi(
         _to_eval_space(train_x_np, log_mask), ss, bin_vars, cont_vars, n_bin, evaluator,
         retry_bad=retry_bad, objective_fn=objective_fn
     )
+    init_eval_sec = round(time.monotonic() - _t_init0, 2)   # 初期サンプル評価の実時間
 
     # 全観測を tensor へ（GP には目的値クリップ版を渡す、ロギング fitness は raw を使う）
     all_x = torch.tensor(train_x_np, dtype=dtype, device=device)
@@ -519,6 +521,8 @@ def run_bo(
         # GP fit → acqf 最適化。失敗時（例: 初期 Sobol が全 bad で outcome の分散ゼロ、
         # GP の数値不安定、acqf 最適化の内部エラー）はループを殺さず Sobol 探索に
         # フォールバックして観測を増やす（次周期で有効観測が入れば GP に復帰する）。
+        _t_model0 = time.monotonic()   # 内訳計時: GP fit / acqf 最適化 / Aspen 評価
+        t_fit_sec = 0.0
         try:
             if use_bootstrap:
                 # ---- 第1相: 制約不足量の最小化（λ 不要・エネルギー無視）----
@@ -570,6 +574,7 @@ def run_bo(
                     constraints=constraints,
                 )
 
+            t_fit_sec = round(time.monotonic() - _t_model0, 2)
             # categorical 列挙 × continuous L-BFGS（両相共通）
             candidates, _ = optimize_acqf_mixed(
                 acq_function=acqf,
@@ -582,15 +587,20 @@ def run_bo(
         except Exception as e:
             print(f"  [CBO] Iter {it+1}: GP/acqf failed ({type(e).__name__}: {e}) "
                   f"→ Sobol フォールバックで {q_batch} 点探索")
+            if t_fit_sec == 0.0:   # fit 途中で失敗した場合はそこまでの時間を fit に計上
+                t_fit_sec = round(time.monotonic() - _t_model0, 2)
             # seed は反復ごとに変えて重複サンプルを避ける（再現性は seed 起点で保たれる）
             candidates = _sobol_initial(q_batch, bounds, n_bin, seed=seed * 10007 + it + 1)
+        t_acq_sec = round(time.monotonic() - _t_model0 - t_fit_sec, 2)
 
         # 評価（candidates は内部表現なので実スケールへ戻して渡す）
         c_np = candidates.detach().cpu().numpy()
+        _t_eval0 = time.monotonic()
         new_o, new_e, new_p, new_r, new_v, n_new = _evaluate_batch_multi(
             _to_eval_space(c_np, log_mask), ss, bin_vars, cont_vars, n_bin, evaluator,
             retry_bad=retry_bad, objective_fn=objective_fn
         )
+        t_eval_sec = round(time.monotonic() - _t_eval0, 2)
 
         # 観測を蓄積
         all_x     = torch.cat([all_x, candidates], dim=0)
@@ -607,9 +617,14 @@ def run_bo(
         ])
         best_fit_log = float(all_fitness.min())
         # phase は SST エージェント・分析用の診断情報（bootstrap=制約探索中 / cei=feasible 圏内）。
-        # "t" は最適化開始からの経過秒（best-so-far vs 時間の収束曲線・時間内訳の集計用）
-        gen_log.append({"gen": it + 1, "best_fitness": best_fit_log, "phase": phase,
-                        "t": round(time.monotonic() - t0, 1)})
+        # "t" は最適化開始からの経過秒（best-so-far vs 時間の収束曲線・時間内訳の集計用）。
+        # t_fit/t_acq/t_eval はこの反復の内訳秒（GP 学習 / 獲得関数最適化 / Aspen 評価）。
+        entry = {"gen": it + 1, "best_fitness": best_fit_log, "phase": phase,
+                 "t": round(time.monotonic() - t0, 1),
+                 "t_fit": t_fit_sec, "t_acq": t_acq_sec, "t_eval": t_eval_sec}
+        if it == 0:
+            entry["t_init_eval"] = init_eval_sec   # Sobol 初期サンプル評価の実時間
+        gen_log.append(entry)
 
         # 進捗表示: best fitness と、feasible best 目的値（あれば）の両方
         if feasible_mask.any():

@@ -193,7 +193,9 @@ def run_ga(
                 del mut.fitness.values
 
         invalid = [ind for ind in offspring if not ind.fitness.valid]
+        _t_eval0 = time.monotonic()
         n_evals += _evaluate_population(invalid)
+        t_eval_sec = round(time.monotonic() - _t_eval0, 2)   # この世代の評価実時間
 
         pop[:] = offspring
         hof.update(pop)
@@ -208,7 +210,8 @@ def run_ga(
         pop[worst_idx] = toolbox.clone(hof[0])
         best_fit = min(ind.fitness.values[0] for ind in pop if ind.fitness.valid)
         gen_log.append({"gen": gen + 1, "best_fitness": best_fit,
-                        "t": round(time.monotonic() - t0, 1)})
+                        "t": round(time.monotonic() - t0, 1),
+                        "t_eval": t_eval_sec})
         print(f"  Gen {gen+1:2d}: best={best_fit:.1f}")
 
     return hof[0], gen_log, n_evals

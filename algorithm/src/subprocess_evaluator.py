@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -91,6 +92,13 @@ class SubprocessEvaluator:
         # 既定はタイムアウト付き（_default_kill_aspen）。詳細はその docstring 参照。
         self._kill_aspen = kill_aspen or _default_kill_aspen
 
+        # 計測（2026-07-15）: 評価グループごとの実時間記録。run_iteration が results.json
+        # の timing に転記する。判定・制御には一切使わない（record-only）。
+        #   groups[i] = {mode, n_requested, n_results, wall_sec, wedged, rc,
+        #                eval_sec: [結果1件ごとの受信間隔秒（先頭はビルド込み）],
+        #                lost_sec: wedge/異常終了で失った秒（最後の受信→終了）}
+        self.timing: dict[str, Any] = {"groups": []}
+
     # ------------------------------------------------------------------
     # 子プロセス駆動（spawn → stream 受信 → stall 判定 → kill）
     # ------------------------------------------------------------------
@@ -103,6 +111,9 @@ class SubprocessEvaluator:
         未受信（wedge / 異常終了 / 欠落）は None。
         """
         results: list[dict | None] = [None] * n
+        _t0 = time.monotonic()          # 計測: グループ全体の壁時計
+        _t_last = _t0                   # 計測: 直近の結果受信時刻（受信間隔＝評価1件の実時間）
+        _eval_sec: list[float] = []
 
         with tempfile.NamedTemporaryFile(
             "w", suffix=".json", delete=False, encoding="utf-8"
@@ -171,6 +182,9 @@ class SubprocessEvaluator:
                 i = msg.get("index")
                 if isinstance(i, int) and 0 <= i < n:
                     results[i] = msg
+                    _now = time.monotonic()          # 計測: 受信間隔＝この1件の実時間
+                    _eval_sec.append(round(_now - _t_last, 2))
+                    _t_last = _now
         finally:
             # 強い手を先に出す（COORDINATION: 順番の罠の修正）。
             # proc.kill() は TerminateProcess＝COM の詰まり方に依存せず必ず効く最終手段。
@@ -207,6 +221,19 @@ class SubprocessEvaluator:
                 f"missing={missing}/{n}"
                 + (f"\n    stderr tail: {''.join(err[-5:])}" if err else "")
             )
+
+        # 計測記録（record-only。wedge/異常時は「最後の受信→終了」を lost_sec に計上）
+        _t_end = time.monotonic()
+        self.timing["groups"].append({
+            "mode": request.get("mode"),
+            "n_requested": n,
+            "n_results": sum(r is not None for r in results),
+            "wall_sec": round(_t_end - _t0, 2),
+            "wedged": wedged,
+            "rc": proc.returncode,
+            "eval_sec": _eval_sec,
+            "lost_sec": round(_t_end - _t_last, 2) if (wedged or abnormal) else 0.0,
+        })
         return results
 
     # ------------------------------------------------------------------
