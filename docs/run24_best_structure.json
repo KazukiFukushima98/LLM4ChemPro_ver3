@@ -1,0 +1,68 @@
+{
+  "_provenance": {
+    "run": "run24",
+    "best_iteration": "iter_008",
+    "date": "2026-07-11",
+    "note": "SST が seed（2段直列）から9反復で自律発見した初の feasible 構造。構造は run24/ss_current.json（iter_008 の promote 後・バイナリ0）、パラメータ・性能・ストリームは iterations/iter_008/results.json より。permeance の GPU 換算は 1 GPU = 2.70677e-3 m3(STP)/(m2 h bar)、選択率 α は Robeson 2008 CO2/N2 上界（k=3.0967e8 GPU, n=2.888）による導出値。"
+  },
+  "performance": {
+    "CO2_purity": 0.9978,
+    "CO2_recovery": 0.9014,
+    "cost_usd_per_tCO2": 73.66,
+    "specific_energy_kWh_tCO2": 532.5,
+    "total_vacuum_pump_kW": 254381,
+    "targets": {"purity_min": 0.95, "recovery_min": 0.90},
+    "feasible": true
+  },
+  "roles": {
+    "MEMB1": "濃縮1段目（高透過膜）",
+    "MEMB2": "濃縮2段目（高選択膜）",
+    "MEMB3": "回収1段目: MEMB1残渣を処理、透過を F1 へ還流（高透過膜）",
+    "MEMB4": "製品精製段: MEMB2透過を磨き、残渣を F2 へ還流（高選択膜）",
+    "MEMB5": "回収2段目: MEMB3残渣をさらに処理、透過を F1 へ還流（高透過膜）"
+  },
+  "units": {
+    "MEMB1": {"area_m2": 1088858, "p_permeate_bar": 0.100, "permeance_GPU": 4666, "alpha_CO2_N2": 46.7, "vp_power_kW": 81403},
+    "MEMB2": {"area_m2": 1348117, "p_permeate_bar": 0.171, "permeance_GPU": 500,  "alpha_CO2_N2": 101.2, "vp_power_kW": 27523},
+    "MEMB3": {"area_m2": 1252780, "p_permeate_bar": 0.100, "permeance_GPU": 6000, "alpha_CO2_N2": 42.9, "vp_power_kW": 65564},
+    "MEMB4": {"area_m2": 243594,  "p_permeate_bar": 0.100, "permeance_GPU": 500,  "alpha_CO2_N2": 101.2, "vp_power_kW": 31728},
+    "MEMB5": {"area_m2": 884974,  "p_permeate_bar": 0.100, "permeance_GPU": 6000, "alpha_CO2_N2": 42.9, "vp_power_kW": 48163}
+  },
+  "streams": {
+    "V0_feed":          {"co2_molfrac": 0.150, "co2_kmol_h": 12046, "to": "F1"},
+    "V1_F1_mixed":      {"co2_molfrac": 0.201, "co2_kmol_h": 27012, "note": "リサイクル3本合流で feed の 2.24 倍の CO2 負荷"},
+    "V2_M1_permeate":   {"co2_molfrac": 0.621, "co2_kmol_h": 17152, "to": "F2"},
+    "V3_M1_retentate":  {"co2_molfrac": 0.093, "co2_kmol_h": 9860,  "to": "MEMB3"},
+    "V5_M2_permeate":   {"co2_molfrac": 0.972, "co2_kmol_h": 12646, "to": "MEMB4"},
+    "V6_M2_retentate":  {"co2_molfrac": 0.376, "co2_kmol_h": 6295,  "to": "F1 (recycle)"},
+    "V13_M4_permeate":  {"co2_molfrac": 0.998, "co2_kmol_h": 10858, "to": "Product"},
+    "V14_M4_retentate": {"co2_molfrac": 0.838, "co2_kmol_h": 1788,  "to": "F2 (recycle)"},
+    "V10_M3_permeate":  {"co2_molfrac": 0.302, "co2_kmol_h": 6526,  "to": "F1 (recycle)"},
+    "V11_M3_retentate": {"co2_molfrac": 0.039, "co2_kmol_h": 3334,  "to": "MEMB5"},
+    "V16_M5_permeate":  {"co2_molfrac": 0.138, "co2_kmol_h": 2145,  "to": "F1 (recycle)"},
+    "V17_residue":      {"co2_molfrac": 0.017, "co2_kmol_h": 1189,  "to": "Residue"}
+  },
+  "topology": {
+    "vertices": {
+      "V0": "feed", "V1": "M1 inlet (F1 mixer)", "V2": "M1 permeate", "V3": "M1 retentate",
+      "V4": "M2 inlet (F2 mixer)", "V5": "M2 permeate", "V6": "M2 retentate",
+      "V7": "product", "V8": "residue",
+      "V9": "M3 inlet", "V10": "M3 permeate", "V11": "M3 retentate",
+      "V12": "M4 inlet", "V13": "M4 permeate", "V14": "M4 retentate",
+      "V15": "M5 inlet", "V16": "M5 permeate", "V17": "M5 retentate"
+    },
+    "arcs": [
+      ["V0", "V1", "feed"],
+      ["V1", "V2", "MEMB1 permeate"], ["V1", "V3", "MEMB1 retentate"],
+      ["V2", "V4", "process"], ["V3", "V9", "process"],
+      ["V4", "V5", "MEMB2 permeate"], ["V4", "V6", "MEMB2 retentate"],
+      ["V5", "V12", "process"], ["V6", "V1", "recycle"],
+      ["V9", "V10", "MEMB3 permeate"], ["V9", "V11", "MEMB3 retentate"],
+      ["V10", "V1", "recycle"], ["V11", "V15", "process"],
+      ["V12", "V13", "MEMB4 permeate"], ["V12", "V14", "MEMB4 retentate"],
+      ["V13", "V7", "product"], ["V14", "V4", "recycle"],
+      ["V15", "V16", "MEMB5 permeate"], ["V15", "V17", "MEMB5 retentate"],
+      ["V16", "V1", "recycle"], ["V17", "V8", "residue"]
+    ]
+  }
+}
