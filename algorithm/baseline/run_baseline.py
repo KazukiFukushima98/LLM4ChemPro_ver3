@@ -92,7 +92,10 @@ def patch_bo_for_onehot(ss: dict[str, Any], seed: int) -> None:
     import bo as bo_mod
 
     combos = build_onehot_fixed_features(ss)
-    assert_all_buildable(ss, combos)
+    # 起動時検証は抜き取り（≤128個・決定論）。全数（lee3=4096, ~10分）は
+    # tests/test_baseline.py の BASELINE_FULL=1 で証明済み（2026-07-12 PASS）。
+    step = max(1, len(combos) // 128)
+    assert_all_buildable(ss, combos[::step])
 
     bo_mod._build_fixed_features = lambda _ss, _bin_vars: combos
 

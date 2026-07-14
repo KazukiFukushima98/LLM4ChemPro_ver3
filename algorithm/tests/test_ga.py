@@ -69,6 +69,9 @@ class TestGAXAlignmentWithPruning(unittest.TestCase):
         self.assertIn(2, seen_dims, f"pruned 側が未評価: dims={seen_dims}")
         self.assertIn(4, seen_dims, f"2段側が未評価: dims={seen_dims}")
         self.assertEqual(len(gen_log), 3)
+        # 計測フィールド "t"（経過秒）が単調非減少で付いている
+        ts = [g["t"] for g in gen_log]
+        self.assertTrue(all(b >= a for a, b in zip(ts, ts[1:])), ts)
 
 
 class TestGACostObjective(unittest.TestCase):

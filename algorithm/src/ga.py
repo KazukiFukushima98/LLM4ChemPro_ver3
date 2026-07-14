@@ -11,6 +11,7 @@ Aspen 実装は Evaluator Protocol 経由で注入（aspen_builder / simulator �
 import random
 import sys
 import os
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -167,6 +168,7 @@ def run_ga(
         return total
 
     random.seed(seed)
+    t0      = time.monotonic()   # gen_log の "t"＝最適化開始からの経過秒
     pop     = toolbox.population(n=pop_size)
     n_evals = _evaluate_population(pop)
 
@@ -205,7 +207,8 @@ def run_ga(
         )
         pop[worst_idx] = toolbox.clone(hof[0])
         best_fit = min(ind.fitness.values[0] for ind in pop if ind.fitness.valid)
-        gen_log.append({"gen": gen + 1, "best_fitness": best_fit})
+        gen_log.append({"gen": gen + 1, "best_fitness": best_fit,
+                        "t": round(time.monotonic() - t0, 1)})
         print(f"  Gen {gen+1:2d}: best={best_fit:.1f}")
 
     return hof[0], gen_log, n_evals

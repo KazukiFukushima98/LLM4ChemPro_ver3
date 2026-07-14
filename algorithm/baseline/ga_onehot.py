@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import random
 import sys
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -183,6 +184,7 @@ def run_ga_onehot(
         return total
 
     # ---- メインループ（ga.py の構成を忠実にミラー）----
+    t0 = time.monotonic()   # gen_log の "t"＝最適化開始からの経過秒
     pop = [new_individual() for _ in range(pop_size)]
     n_evals = evaluate(pop)
 
@@ -219,7 +221,8 @@ def run_ga_onehot(
                         key=lambda i: pop[i]["fit"] if pop[i]["fit"] is not None else float("inf"))
         pop[worst_idx] = clone(best)
         best_fit = min(ind["fit"] for ind in pop if ind["fit"] is not None)
-        gen_log.append({"gen": gen + 1, "best_fitness": best_fit})
+        gen_log.append({"gen": gen + 1, "best_fitness": best_fit,
+                        "t": round(time.monotonic() - t0, 1)})
         print(f"  Gen {gen+1:2d}: best={best_fit:.1f}")
 
     # run_ga 互換のフル染色体（0/1 バイナリ + 連続）で返す

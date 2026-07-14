@@ -44,6 +44,7 @@ from __future__ import annotations
 import itertools
 import os
 import sys
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -482,6 +483,8 @@ def run_bo(
           f"(floor={max(1, n_iter // 3)}), "
           f"constraints: purity≥{purity_min}, recovery≥{recovery_min}")
 
+    t0 = time.monotonic()   # 計算時間内訳の記録用（gen_log の "t"＝最適化開始からの経過秒）
+
     # ----- 1. Sobol 初期サンプル -----
     # train_x_np は内部表現（log 対象列は log 空間＝log-uniform サンプリングになる）
     train_x_np = _sobol_initial(n_init, bounds, n_bin, seed).detach().cpu().numpy()
@@ -603,8 +606,10 @@ def run_bo(
             for o, p, r in zip(all_o_raw, all_p_raw, all_r_raw)
         ])
         best_fit_log = float(all_fitness.min())
-        # phase は SST エージェント・分析用の診断情報（bootstrap=制約探索中 / cei=feasible 圏内）
-        gen_log.append({"gen": it + 1, "best_fitness": best_fit_log, "phase": phase})
+        # phase は SST エージェント・分析用の診断情報（bootstrap=制約探索中 / cei=feasible 圏内）。
+        # "t" は最適化開始からの経過秒（best-so-far vs 時間の収束曲線・時間内訳の集計用）
+        gen_log.append({"gen": it + 1, "best_fitness": best_fit_log, "phase": phase,
+                        "t": round(time.monotonic() - t0, 1)})
 
         # 進捗表示: best fitness と、feasible best 目的値（あれば）の両方
         if feasible_mask.any():
