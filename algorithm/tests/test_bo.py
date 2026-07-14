@@ -85,7 +85,9 @@ class _AllBadMock:
 class _ShortfallLandscapeMock:
     """全点 infeasible で shortfall と energy が逆相関する地形（12.5(a) の検証用）。
 
-    第1連続変数 a（MEMB1_area。bounds は UNIT_BOUNDS から動的に取る）に対し
+    連続変数 a = MEMB1_area（名前で特定。スケールが大きい変数であることが本質で、
+    penalty_weight=1 のとき energy 項（0.01*a ≈ 1e3〜1e4）が shortfall 項（≤0.4）を
+    支配する地形を作る）に対し
         purity   = 0.5 + 0.399 * t   （t=(a-lo)/(hi-lo)。最大 0.899 < 0.9 → 常に infeasible）
         recovery = 0.85              （≥ 0.7 → shortfall は purity 由来のみ）
         energy   = 100 + 0.01 * a
@@ -93,7 +95,9 @@ class _ShortfallLandscapeMock:
     「a 最小」となり、best 返却の軸を区別できる。評価した a は self.seen に記録する。
     """
 
-    _LO, _HI = T.continuous_variables(_load_seed())[0]["bounds"]
+    IDX = next(i for i, v in enumerate(T.continuous_variables(_load_seed()))
+               if v["name"] == "MEMB1_area")
+    _LO, _HI = T.continuous_variables(_load_seed())[IDX]["bounds"]
 
     def __init__(self) -> None:
         self.seen: list[float] = []
@@ -101,7 +105,7 @@ class _ShortfallLandscapeMock:
     def evaluate_topology(self, topology: dict, x_list: list[list[float]]) -> list[Metrics]:
         out: list[Metrics] = []
         for x in x_list:
-            a = float(x[0])
+            a = float(x[self.IDX])
             self.seen.append(a)
             t = (a - self._LO) / (self._HI - self._LO)
             out.append(Metrics(specific_energy=100.0 + 0.01 * a,
@@ -259,7 +263,7 @@ class TestRunBO(unittest.TestCase):
             best, gen_log, _ = run_bo(ss, case, mock, seed=21)
         self.assertTrue(all(g["phase"] == "bootstrap" for g in gen_log))
         # 観測された a のうち最大（= shortfall 最小）が返る
-        self.assertAlmostEqual(best[0], max(mock.seen), places=6)
+        self.assertAlmostEqual(best[mock.IDX], max(mock.seen), places=6)
 
     def test_bootstrap_off_best_keeps_legacy_penalty_min(self) -> None:
         """12.5(a) ロールバック口: bootstrap: off なら旧来の penalty-min 返却のまま。"""
@@ -272,7 +276,7 @@ class TestRunBO(unittest.TestCase):
             best, gen_log, _ = run_bo(ss, case, mock, seed=22)
         self.assertTrue(all(g["phase"] == "cei" for g in gen_log))
         # penalty_weight=1 では fitness ≈ energy = 100 + 0.01a → a 最小が返る
-        self.assertAlmostEqual(best[0], min(mock.seen), places=6)
+        self.assertAlmostEqual(best[mock.IDX], min(mock.seen), places=6)
 
     def test_bootstrap_yaml_false_treated_as_off(self) -> None:
         """YAML 1.1 は `off` を bool False にパースする。False でも off 扱いになること。"""
@@ -341,8 +345,8 @@ class TestMembraneModelIntegration(unittest.TestCase):
         case["membrane_model"] = {"tie": True}
         with redirect_stdout(io.StringIO()):
             best, gen_log, _ = run_bo(ss, case, _SmoothMock(), seed=51)
-        # seed は連続4変数 + 共有 MEMB_perm = 5 次元
-        self.assertEqual(len(best), 5)
+        # seed は連続5変数（膜4 + COMP1_pout）+ 共有 MEMB_perm = 6 次元
+        self.assertEqual(len(best), 6)
         lo, hi = T.continuous_variables(ss, {"tie": True})[0]["bounds"]
         self.assertGreaterEqual(best[0], lo - 1e-9)  # 先頭が MEMB_perm
         self.assertLessEqual(best[0], hi + 1e-9)
@@ -354,8 +358,8 @@ class TestMembraneModelIntegration(unittest.TestCase):
         case["membrane_model"] = {"tie": False}
         with redirect_stdout(io.StringIO()):
             best, gen_log, _ = run_bo(ss, case, _SmoothMock(), seed=52)
-        # 連続4変数 + MEMB1_perm + MEMB2_perm = 6 次元
-        self.assertEqual(len(best), 6)
+        # 連続5変数（膜4 + COMP1_pout）+ MEMB1_perm + MEMB2_perm = 7 次元
+        self.assertEqual(len(best), 7)
 
 
 class TestPhasePatience(unittest.TestCase):
@@ -426,6 +430,9 @@ class TestPatienceIntegration(unittest.TestCase):
             best, gen_log, _ = run_bo(ss, case, self._ConstantFeasibleMock(), seed=72)
         self.assertEqual(len(gen_log), 3)
         self.assertNotIn("early_stop", gen_log[-1])
+        # 計測フィールド "t"（経過秒）が単調非減少で付いている
+        ts = [g["t"] for g in gen_log]
+        self.assertTrue(all(b >= a for a, b in zip(ts, ts[1:])), ts)
 
 
 class TestCostObjective(unittest.TestCase):
@@ -452,8 +459,9 @@ class TestCostObjective(unittest.TestCase):
             def evaluate_topology(self, topology, x_list):
                 out = []
                 for x in x_list:
-                    # cont vars = [M1_area, M1_pp, M2_area, M2_pp]（seed・membrane_model なし）
-                    self.area_sums.append(float(x[0]) + float(x[2]))
+                    # cont vars = [COMP1_pout, M1_area, M1_pp, M2_area, M2_pp]
+                    # （seed・membrane_model なし。名前順で COMP1_pout が先頭）
+                    self.area_sums.append(float(x[1]) + float(x[3]))
                     out.append(Metrics(specific_energy=300.0, purity=0.96, recovery=0.92))
                 return out
 
@@ -465,7 +473,7 @@ class TestCostObjective(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             best, gen_log, _ = run_bo(ss, self._cost_case(), mock, seed=61)
         # 全点 feasible → best は cost 最小 ＝ 膜面積合計が最小の観測
-        best_sum = best[0] + best[2]
+        best_sum = best[1] + best[3]
         self.assertAlmostEqual(best_sum, min(mock.area_sums), places=6)
 
     def test_energy_mode_unaffected(self) -> None:

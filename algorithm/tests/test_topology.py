@@ -492,6 +492,46 @@ class TestMixerSplitterVps(unittest.TestCase):
         mixers = T.mixer_vertices(ss)
         self.assertIn("V1", mixers)
 
+    def test_mixer_at_noop_fed_unit_inlet(self):
+        """規則(4): 素通しアークで給餌される非膜ユニット入口は Mixer になる。
+
+        pre-mixer 配置（feed → V6 → COMP1 → V7 → 膜入口）で、V6 を Mixer 化
+        しないと builder が入口ストリームを生成せず孤立する（2026-07-14 の
+        新 seed 全評価 silent BAD の原因）。
+        """
+        ss = make_minimal_ss()
+        ss["vertices"]["V6"] = {"role": "internal", "label": "COMP1 inlet (pre-mixer)"}
+        ss["vertices"]["V7"] = {"role": "internal", "label": "COMP1 outlet"}
+        del ss["arcs"][("V0", "V1")]
+        ss["arcs"][("V0", "V6")] = {"type": "feed"}
+        ss["arcs"][("V6", "V7")] = {"type": "compressor", "unit": "COMP1"}
+        ss["arcs"][("V7", "V1")] = {"type": "process"}
+        ss["units"]["COMP1"] = {
+            "type": "COMP", "inlet": "V6", "outlets": {"outlet": "V7"},
+            "params": {"outlet_pressure": 2.5},
+        }
+        mixers = T.mixer_vertices(ss)
+        self.assertIn("V6", mixers)   # 規則(4): 素通し（feed）給餌のユニット入口
+        self.assertIn("V1", mixers)   # 規則(1): 膜入口は従来どおり
+
+    def test_no_mixer_at_unit_arc_fed_inlet(self):
+        """規則(4)の非対象: unit アークで直接給餌される入口は Mixer にしない（既存配線を変えない）。
+
+        例: 膜 permeate 出口 V2 をそのまま COMP2 の入口にする従来パターン
+        （ストリーム V2 は膜ブロックが生成するので Mixer 不要）。
+        """
+        ss = make_minimal_ss()
+        ss["vertices"]["V6"] = {"role": "internal", "label": "COMP2 outlet"}
+        del ss["arcs"][("V2", "V4")]
+        ss["arcs"][("V2", "V6")] = {"type": "compressor", "unit": "COMP2"}
+        ss["arcs"][("V6", "V4")] = {"type": "process"}
+        ss["units"]["COMP2"] = {
+            "type": "COMP", "inlet": "V2", "outlets": {"outlet": "V6"},
+            "params": {"outlet_pressure": 2.5},
+        }
+        mixers = T.mixer_vertices(ss)
+        self.assertNotIn("V2", mixers)  # unit アーク給餌 → 従来どおり Mixer なし
+
     def test_splitter_when_out_degree_two(self):
         ss = make_minimal_ss()
         # V1 から MEMB の 2本（permeate / retentate）が出ているので splitter になる
@@ -788,8 +828,8 @@ class TestAllocateIds(unittest.TestCase):
         """id_counters の無い旧形式（ss_seed.json 等）は現存最大から初期化（後方互換）。"""
         if not os.path.exists(SEED_PATH):
             self.skipTest(f"seed not found at {SEED_PATH}")
-        ss = T.load_ss(SEED_PATH)  # V0..V8, 候補なし
-        self.assertEqual(T.allocate_vertex_id(ss), "V9")
+        ss = T.load_ss(SEED_PATH)  # V0..V10（COMP1 入り seed）、候補なし
+        self.assertEqual(T.allocate_vertex_id(ss), "V11")
         self.assertEqual(T.allocate_candidate_id(ss), "q_1")
 
 

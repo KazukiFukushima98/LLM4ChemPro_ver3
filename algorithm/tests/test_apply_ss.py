@@ -60,22 +60,22 @@ class TestAddUnit(unittest.TestCase):
             ],
         }
         new_ss = A.apply_change(ss, change)
-        # 既存頂点の max=8 → 新規は V9, V10（permeate→retentate のポート順）
-        self.assertIn("V9", new_ss["vertices"])
-        self.assertIn("V10", new_ss["vertices"])
+        # 既存頂点の max=10（COMP1 入り seed）→ 新規は V11, V12（permeate→retentate のポート順）
+        self.assertIn("V11", new_ss["vertices"])
+        self.assertIn("V12", new_ss["vertices"])
         # 旧直結アークは削除されている
         self.assertNotIn(("V2", "V4"), new_ss["arcs"])
         # 新しいアーク4本
-        self.assertEqual(new_ss["arcs"][("V2", "V9")],
+        self.assertEqual(new_ss["arcs"][("V2", "V11")],
                          {"type": "membrane_permeate", "unit": "MEMB3"})
-        self.assertEqual(new_ss["arcs"][("V9", "V4")], {"type": "process"})
-        self.assertEqual(new_ss["arcs"][("V2", "V10")],
+        self.assertEqual(new_ss["arcs"][("V11", "V4")], {"type": "process"})
+        self.assertEqual(new_ss["arcs"][("V2", "V12")],
                          {"type": "membrane_retentate", "unit": "MEMB3"})
-        self.assertEqual(new_ss["arcs"][("V10", "V8")], {"type": "process"})
+        self.assertEqual(new_ss["arcs"][("V12", "V8")], {"type": "process"})
         # units 登録
         self.assertEqual(new_ss["units"]["MEMB3"]["inlet"], "V2")
         self.assertEqual(new_ss["units"]["MEMB3"]["outlets"],
-                         {"permeate": "V9", "retentate": "V10"})
+                         {"permeate": "V11", "retentate": "V12"})
         self.assertEqual(new_ss["units"]["MEMB3"]["type"], "MEMB")
         self.assertEqual(new_ss["units"]["MEMB3"]["params"]["area"], 10000.0)
         # validate 通る
@@ -136,21 +136,24 @@ class TestAddUnit(unittest.TestCase):
             A.apply_change(ss, change)
 
     def test_add_comp_two_arcs_per_port(self):
-        """COMP も MEMB と同じ2本構成（内部 compressor + 後段 process）。"""
+        """COMP も MEMB と同じ2本構成（内部 compressor + 後段 process）。
+
+        seed に COMP1（feed 昇圧・固定）が既にいるので、追加分は COMP2 と命名する。
+        """
         ss = load_seed()
         change = {"operations": [
-            {"op": "add_unit", "unit_type": "COMP", "unit": "COMP1",
+            {"op": "add_unit", "unit_type": "COMP", "unit": "COMP2",
              "inlet": "V2", "outlet_to": "V4",
              "params": {"outlet_pressure": 5.0}}
         ]}
         new_ss = A.apply_change(ss, change)
-        # 旧直結 (V2,V4) 削除、新頂点 V9 (outlet) 追加
+        # 旧直結 (V2,V4) 削除、新頂点 V11 (outlet) 追加（max=10 の次）
         self.assertNotIn(("V2", "V4"), new_ss["arcs"])
-        self.assertIn("V9", new_ss["vertices"])
-        self.assertEqual(new_ss["arcs"][("V2", "V9")],
-                         {"type": "compressor", "unit": "COMP1"})
-        self.assertEqual(new_ss["arcs"][("V9", "V4")], {"type": "process"})
-        self.assertEqual(new_ss["units"]["COMP1"]["outlets"], {"outlet": "V9"})
+        self.assertIn("V11", new_ss["vertices"])
+        self.assertEqual(new_ss["arcs"][("V2", "V11")],
+                         {"type": "compressor", "unit": "COMP2"})
+        self.assertEqual(new_ss["arcs"][("V11", "V4")], {"type": "process"})
+        self.assertEqual(new_ss["units"]["COMP2"]["outlets"], {"outlet": "V11"})
         T.validate(new_ss)
 
     def test_add_expander_two_arcs_per_port(self):
@@ -162,13 +165,13 @@ class TestAddUnit(unittest.TestCase):
              "params": {"outlet_pressure": 1.0}}
         ]}
         new_ss = A.apply_change(ss, change)
-        # 旧直結 (V3,V8) residue 削除、新頂点 V9 (outlet) 追加
+        # 旧直結 (V3,V8) residue 削除、新頂点 V11 (outlet) 追加
         self.assertNotIn(("V3", "V8"), new_ss["arcs"])
-        self.assertIn("V9", new_ss["vertices"])
-        self.assertEqual(new_ss["arcs"][("V3", "V9")],
+        self.assertIn("V11", new_ss["vertices"])
+        self.assertEqual(new_ss["arcs"][("V3", "V11")],
                          {"type": "expander", "unit": "EXP1"})
-        self.assertEqual(new_ss["arcs"][("V9", "V8")], {"type": "process"})
-        self.assertEqual(new_ss["units"]["EXP1"]["outlets"], {"outlet": "V9"})
+        self.assertEqual(new_ss["arcs"][("V11", "V8")], {"type": "process"})
+        self.assertEqual(new_ss["units"]["EXP1"]["outlets"], {"outlet": "V11"})
         # GA 変数は増えない（膨張機は変数なしの構造部品）
         names = [cv["name"] for cv in T.continuous_variables(new_ss)]
         self.assertNotIn("EXP1_pout", names)
@@ -184,11 +187,11 @@ class TestAddUnit(unittest.TestCase):
         ]}
         new_ss = A.apply_change(ss, change)
         self.assertNotIn(("V2", "V4"), new_ss["arcs"])
-        self.assertEqual(new_ss["arcs"][("V2", "V9")],
+        self.assertEqual(new_ss["arcs"][("V2", "V11")],
                          {"type": "heater", "unit": "HEAT1"})
-        self.assertEqual(new_ss["arcs"][("V9", "V4")], {"type": "process"})
+        self.assertEqual(new_ss["arcs"][("V11", "V4")], {"type": "process"})
         names = [cv["name"] for cv in T.continuous_variables(new_ss)]
-        self.assertEqual(len(names), 4)  # 膜2基×2 のみ（HEAT は変数を持たない）
+        self.assertEqual(len(names), 5)  # 膜2基×2 ＋ COMP1_pout（HEAT は変数を持たない）
         T.validate(new_ss)
 
 
@@ -225,30 +228,30 @@ class TestAddGatedUnit(unittest.TestCase):
     def test_expands_to_toggle_pair(self):
         ss = load_seed()
         new_ss = A.apply_change(ss, _gate_memb3_on_v5())
-        # 新インレット V9・出力 V10/V11（max=8 → V9,V10,V11）
-        self.assertIn("V9", new_ss["vertices"])
-        self.assertIn("V10", new_ss["vertices"])
+        # 新インレット V11・出力 V12/V13（max=10 → V11,V12,V13）
         self.assertIn("V11", new_ss["vertices"])
+        self.assertIn("V12", new_ss["vertices"])
+        self.assertIn("V13", new_ss["vertices"])
         # 膜の内部アーク（固定・unit 所有）
-        self.assertEqual(new_ss["arcs"][("V9", "V10")],
+        self.assertEqual(new_ss["arcs"][("V11", "V12")],
                          {"type": "membrane_permeate", "unit": "MEMB3"})
-        self.assertEqual(new_ss["arcs"][("V9", "V11")],
+        self.assertEqual(new_ss["arcs"][("V11", "V13")],
                          {"type": "membrane_retentate", "unit": "MEMB3"})
         # 後段アーク
-        self.assertEqual(new_ss["arcs"][("V10", "V7")], {"type": "process"})
-        self.assertEqual(new_ss["arcs"][("V11", "V8")], {"type": "process"})
-        # 給餌候補（V5→V9）とバイパス候補（V5→V7）がともに candidate
-        self.assertIn("candidate", new_ss["arcs"][("V5", "V9")])
+        self.assertEqual(new_ss["arcs"][("V12", "V7")], {"type": "process"})
+        self.assertEqual(new_ss["arcs"][("V13", "V8")], {"type": "process"})
+        # 給餌候補（V5→V11）とバイパス候補（V5→V7）がともに candidate
+        self.assertIn("candidate", new_ss["arcs"][("V5", "V11")])
         self.assertIn("candidate", new_ss["arcs"][("V5", "V7")])
         # 2つの候補は別ラベル（バイナリ2本）
-        self.assertNotEqual(new_ss["arcs"][("V5", "V9")]["candidate"],
+        self.assertNotEqual(new_ss["arcs"][("V5", "V11")]["candidate"],
                             new_ss["arcs"][("V5", "V7")]["candidate"])
         # バイパスは元の product 型を引き継ぐ
         self.assertEqual(new_ss["arcs"][("V5", "V7")]["type"], "product")
         # ユニット登録
-        self.assertEqual(new_ss["units"]["MEMB3"]["inlet"], "V9")
+        self.assertEqual(new_ss["units"]["MEMB3"]["inlet"], "V11")
         self.assertEqual(new_ss["units"]["MEMB3"]["outlets"],
-                         {"permeate": "V10", "retentate": "V11"})
+                         {"permeate": "V12", "retentate": "V13"})
 
     def test_result_validates(self):
         ss = load_seed()
@@ -265,11 +268,11 @@ class TestAddGatedUnit(unittest.TestCase):
         # 給餌候補 OFF（バイパス ON）→ active_topology の pruning が MEMB3 を刈り取る
         ss = load_seed()
         new_ss = A.apply_change(ss, _gate_memb3_on_v5())
-        q_feed = new_ss["arcs"][("V5", "V9")]["candidate"]
+        q_feed = new_ss["arcs"][("V5", "V11")]["candidate"]
         q_byp = new_ss["arcs"][("V5", "V7")]["candidate"]
         topo = T.active_topology(new_ss, {q_feed: 0, q_byp: 1})
         self.assertNotIn("MEMB3", topo["units"])
-        for v in ("V9", "V10", "V11"):
+        for v in ("V11", "V12", "V13"):
             self.assertNotIn(v, topo["vertices"])
         self.assertIn(("V5", "V7"), topo["arcs"])  # バイパス経路は残る
         self.assertIsNone(T.is_buildable(topo))    # クリーン2段
@@ -278,11 +281,11 @@ class TestAddGatedUnit(unittest.TestCase):
         # 給餌候補 ON（バイパス OFF）→ MEMB3 が建つ・is_buildable OK
         ss = load_seed()
         new_ss = A.apply_change(ss, _gate_memb3_on_v5())
-        q_feed = new_ss["arcs"][("V5", "V9")]["candidate"]
+        q_feed = new_ss["arcs"][("V5", "V11")]["candidate"]
         q_byp = new_ss["arcs"][("V5", "V7")]["candidate"]
         topo = T.active_topology(new_ss, {q_feed: 1, q_byp: 0})
         self.assertIn("MEMB3", topo["units"])
-        self.assertIn(("V5", "V9"), topo["arcs"])
+        self.assertIn(("V5", "V11"), topo["arcs"])
         self.assertNotIn(("V5", "V7"), topo["arcs"])
         self.assertIsNone(T.is_buildable(topo))
 
@@ -381,9 +384,9 @@ class TestDeleteUnit(unittest.TestCase):
         self.assertNotIn(("V2", "V8"), new_ss["arcs"])
         # MEMB3 が登録され、permeate→V7, retentate→V8 の後段が張られる
         self.assertIn("MEMB3", new_ss["units"])
-        # max=8 → V9, V10
-        self.assertEqual(new_ss["arcs"][("V9", "V7")], {"type": "process"})
-        self.assertEqual(new_ss["arcs"][("V10", "V8")], {"type": "process"})
+        # max=10 → V11, V12
+        self.assertEqual(new_ss["arcs"][("V11", "V7")], {"type": "process"})
+        self.assertEqual(new_ss["arcs"][("V12", "V8")], {"type": "process"})
         # validate 通る
         T.validate(new_ss)
 
@@ -471,9 +474,9 @@ class TestDeleteUnitInletSharing(unittest.TestCase):
 
         # V1 は所有外 outgoing が残っているので残存
         self.assertIn("V1", new_ss["vertices"])
-        # 流入 (V0, V1) もそのまま、residue 振替なし
-        self.assertEqual(new_ss["arcs"][("V0", "V1")], {"type": "feed"})
-        self.assertNotIn(("V0", "V8"), new_ss["arcs"])
+        # 流入 (V10, V1)（COMP1 後段の process）もそのまま、residue 振替なし
+        self.assertEqual(new_ss["arcs"][("V10", "V1")], {"type": "process"})
+        self.assertNotIn(("V10", "V8"), new_ss["arcs"])
         # 所有外 outgoing は維持
         self.assertEqual(new_ss["arcs"][("V1", "V20")], {"type": "process"})
 
@@ -512,7 +515,7 @@ class TestAddArc(unittest.TestCase):
     def test_add_arc_duplicate_raises(self):
         ss = load_seed()
         change = {"operations": [
-            {"op": "add_arc", "from": "V0", "to": "V1", "type": "feed"}
+            {"op": "add_arc", "from": "V0", "to": "V9", "type": "feed"}
         ]}
         with self.assertRaisesRegex(ApplyError, "already exists"):
             A.apply_change(ss, change)
@@ -830,7 +833,7 @@ class TestStructureGuards(unittest.TestCase):
         """直結 (V4,V5) は MEMB2 所有アーク。add_unit が黙って壊すのを拒否する。"""
         ss = load_seed()
         change = {"operations": [
-            {"op": "add_unit", "unit_type": "COMP", "unit": "COMP1",
+            {"op": "add_unit", "unit_type": "COMP", "unit": "COMP9",
              "inlet": "V4", "outlet_to": "V5", "params": {}}
         ]}
         with self.assertRaisesRegex(ApplyError, "owned by unit 'MEMB2'"):
@@ -886,7 +889,7 @@ class TestStructureGuards(unittest.TestCase):
 class TestIdNoReuseThroughApply(unittest.TestCase):
 
     def test_delete_max_unit_then_add_gets_fresh_ids(self):
-        """MEMB3 追加（V9,V10 払い出し）→ 削除 → MEMB4 追加は V11,V12 を得る。"""
+        """MEMB3 追加（V11,V12 払い出し）→ 削除 → MEMB4 追加は V13,V14 を得る。"""
         ss = load_seed()
         add3 = {"operations": [
             {"op": "add_unit", "unit_type": "MEMB", "unit": "MEMB3",
@@ -895,12 +898,12 @@ class TestIdNoReuseThroughApply(unittest.TestCase):
         ]}
         ss1 = A.apply_change(ss, add3)
         self.assertEqual(ss1["units"]["MEMB3"]["outlets"],
-                         {"permeate": "V9", "retentate": "V10"})
+                         {"permeate": "V11", "retentate": "V12"})
 
         del3 = {"operations": [{"op": "delete_unit", "unit": "MEMB3"}]}
         ss2 = A.apply_change(ss1, del3)
-        self.assertNotIn("V9", ss2["vertices"])
-        self.assertNotIn("V10", ss2["vertices"])
+        self.assertNotIn("V11", ss2["vertices"])
+        self.assertNotIn("V12", ss2["vertices"])
 
         add4 = {"operations": [
             {"op": "add_unit", "unit_type": "MEMB", "unit": "MEMB4",
@@ -908,9 +911,9 @@ class TestIdNoReuseThroughApply(unittest.TestCase):
              "params": {}}
         ]}
         ss3 = A.apply_change(ss2, add4)
-        # V9/V10 は永久欠番（旧実装はここで V9/V10 を別の流れに再割当していた）
+        # V11/V12 は永久欠番（旧実装はここで V11/V12 を別の流れに再割当していた）
         self.assertEqual(ss3["units"]["MEMB4"]["outlets"],
-                         {"permeate": "V11", "retentate": "V12"})
+                         {"permeate": "V13", "retentate": "V14"})
 
 
 if __name__ == "__main__":

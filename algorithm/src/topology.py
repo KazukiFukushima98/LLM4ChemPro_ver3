@@ -647,6 +647,13 @@ def mixer_vertices(topology: dict[str, Any]) -> set[str]:
         (1) 膜アーク（membrane_permeate / membrane_retentate）の src 頂点
         (2) 入次数 2 以上の頂点
         (3) sink (role=product/residue) 頂点（測定点確保のためストリーム化する）
+        (4) 素通しアーク（unit を持たない feed/process/recycle）で給餌される
+            ユニット入口頂点（2026-07-14）。builder は素通しアークを
+            「行き先 Mixer の F(IN) 登録」としてしか配線しないため、Mixer 化しないと
+            入口ストリームを誰も生成せず孤立する（feed→合流点→COMP の pre-mixer
+            配置や、add_gated_unit の非膜ユニットが該当。膜入口は (1) で既に Mixer、
+            ユニット出口直結の入口は unit アーク給餌なので対象外＝既存配線は不変）。
+            単入力 Mixer は Aspen 上無害で、リサイクル追加時は自然に多入力になる。
     """
     vertices = topology["vertices"]
     arcs = topology["arcs"]
@@ -666,6 +673,11 @@ def mixer_vertices(topology: dict[str, Any]) -> set[str]:
     for vid, vdef in vertices.items():
         if vdef.get("role") in SinkRoles:
             result.add(vid)
+
+    unit_inlets = {udef["inlet"] for udef in topology.get("units", {}).values()}
+    for (_, to), meta in arcs.items():
+        if not meta.get("unit") and to in unit_inlets:
+            result.add(to)
 
     return result
 

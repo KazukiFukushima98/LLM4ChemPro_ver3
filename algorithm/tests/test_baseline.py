@@ -1,7 +1,7 @@
 """比較対象（12.6 一括最適化・baseline/）の単体テスト（Aspen 不要）。
 
 対象:
-- ss_lee2.json / ss_lee3.json（Lee Fig.2 型 SS・圧力機器なし）の構造整合
+- ss_lee2.json / ss_lee3.json（Lee Fig.2 型 SS・各段に固定 COMP 入り）の構造整合
 - one-hot 有効組合せの解析的生成（81 / 4096）と全数ビルド可能性（設計不変条件）
 - ga_onehot（カテゴリカル構造遺伝子の GA）の完走・one-hot 保証・決定論
 - BO への実行時注入（patch_bo_for_onehot）での完走と one-hot 保証
@@ -56,34 +56,35 @@ class TestLeeSeeds(unittest.TestCase):
         ss = T.load_ss(LEE2)
         self.assertEqual(len(T.binary_variables(ss)), 12)
         self.assertEqual([len(g) for g in onehot_groups(ss)], [3, 3, 3, 3])
-        # 段別独立膜: 2膜 × (area, p_perm, perm) = 6
-        self.assertEqual(len(T.continuous_variables(ss, _MM)), 6)
+        # 段別独立膜: 2膜 × (area, p_perm, perm) = 6 ＋ 各段 COMP の pout ×2 = 8
+        self.assertEqual(len(T.continuous_variables(ss, _MM)), 8)
 
     def test_lee3_shape(self):
         ss = T.load_ss(LEE3)
         self.assertEqual(len(T.binary_variables(ss)), 24)
         self.assertEqual([len(g) for g in onehot_groups(ss)], [4] * 6)
-        self.assertEqual(len(T.continuous_variables(ss, _MM)), 9)
+        # 3膜 × 3 ＋ 各段 COMP の pout ×3 = 12
+        self.assertEqual(len(T.continuous_variables(ss, _MM)), 12)
 
     def test_lee2_series_no_recycle_topology(self):
         """直列（M1→M2→P、残渣→R）の one-hot 割当が正しい2段構造になる。"""
         ss = T.load_ss(LEE2)
         q = {f"q_{k}": 0 for k in range(1, 13)}
-        q.update({"q_2": 1, "q_6": 1, "q_9": 1, "q_12": 1})  # V2→V4, V3→R, V5→P, V6→R
+        q.update({"q_2": 1, "q_6": 1, "q_9": 1, "q_12": 1})  # V2→F2, V3→R, V5→P, V6→R
         topo = T.active_topology(ss, q)
         self.assertIsNone(T.is_buildable(topo))
-        self.assertEqual(set(topo["units"]), {"MEMB1", "MEMB2"})
-        self.assertIn(("V2", "V4"), topo["arcs"])
+        self.assertEqual(set(topo["units"]), {"COMP1", "COMP2", "MEMB1", "MEMB2"})
+        self.assertIn(("V2", "V11"), topo["arcs"])  # M1透過 → F2 pre-mixer（COMP2 前）
         self.assertIn(("V5", "V7"), topo["arcs"])
 
     def test_lee2_unfed_m2_prunes_to_single_stage(self):
-        """M2 に誰も給餌しない割当では M2 が刈られ、1段構成として成立する。"""
+        """M2 に誰も給餌しない割当では COMP2+M2 が連鎖して刈られ、1段構成として成立する。"""
         ss = T.load_ss(LEE2)
         q = {f"q_{k}": 0 for k in range(1, 13)}
         q.update({"q_3": 1, "q_6": 1})  # V2→P, V3→R（M2 系は給餌なし）
         topo = T.active_topology(ss, q)
         self.assertIsNone(T.is_buildable(topo))
-        self.assertEqual(set(topo["units"]), {"MEMB1"})
+        self.assertEqual(set(topo["units"]), {"COMP1", "MEMB1"})
 
 
 class TestOnehotEnumeration(unittest.TestCase):
@@ -154,6 +155,8 @@ class TestGAOnehot(unittest.TestCase):
             self.assertEqual(sum(best[i] for i in g), 1.0, "best が one-hot でない")
         self.assertEqual(len(gen_log), 3)
         self.assertGreaterEqual(n_evals, 8)
+        ts = [g["t"] for g in gen_log]
+        self.assertTrue(all(b >= a for a, b in zip(ts, ts[1:])), ts)
         # 連続部が bounds 内
         for v, cv in zip(best[n_bin:], T.continuous_variables(ss, _MM)):
             lo, hi = cv["bounds"]
