@@ -5,7 +5,35 @@
 
 ---
 
-## 直近の状態（2026-07-10 時点）— 12.5(a)(b)・12.3・12.1・12.2 実装済み。次は 12.5(c) → 12.4 → smoke → run24
+## 直近の状態（2026-07-15 時点）— 昇圧 campaign 第1走 run25 完了（52.12 $/t）。次は baseline 比較（12.6）
+
+**run25 完了（2026-07-15）**：昇圧空間での SST。**best 52.12 $/tCO2**（purity 0.972 /
+recovery 0.903 / 542 kWh/t、7反復・943評価で収束停止）。**run24（真空のみ 73.66）比 −29%**。
+詳細は `docs/experiment_log.md` の run25 節と `algorithm/runs/run25/HANDOFF.md`。
+
+**セットアップ変更（2026-07-14、`f2424a1`・実機 smoke 全7項目 PASS）**：
+- 全 seed に固定 COMP 導入（ユーザ決定・案A）：SST seed は feed COMP1
+  （pout ∈ [1.1, 4.0]、bounds_override）、baseline ss_lee2/ss_lee3 は各段 COMP
+  （pout=1 で実質圧縮なしに退化＝Lee の S_c をバイナリなしで包含）。
+- **Mixer 規則(4) 追加**（`topology.mixer_vertices`）：素通しアーク給餌のユニット入口を
+  Mixer 化。pre-mixer 配置（1 bar 合流 → COMP → 膜）が builder で配線されず全評価
+  silent BAD になる穴を smoke で発見・修正。add_gated_unit の非膜ユニットも同修正で有効化。
+- 計測：gen_log に経過秒 `t`（`a8b3202`）。
+
+**ユーザ決定（2026-07-14）**：リサイクル減圧の膨張回収（Lee の W_ex、例 1.6→1.3 bar）は
+スコープ外。Mixer 最小圧追従のフリー絞り＝回収なしで、コストは保守側に偏るだけ・
+SST/baseline 両方に等しく効くため比較の公平性は無傷。論文に明記する。
+（vent 経路の EXP 回収は対象内——run25 で試行され「動くがコスト最適でない」と実測）。
+
+**次の作業**：
+1. **baseline 比較（12.6 本命）**：昇圧空間の ss_lee2/ss_lee3 を run_baseline（BO/GA・
+   約2,000評価）で回し、SST（943評価・52.12）と比較。
+2. 再現 run（run26〜）で 52 前後の再現性確認。
+3. （継続未決）COMP1_pout 上限 4 bar 張り付きの扱い／アクティブ制約近傍の BO 分散対策。
+
+---
+
+## 前回の状態（2026-07-10 時点）— 12.5(a)(b)・12.3・12.1・12.2 実装済み。次は 12.5(c) → 12.4 → smoke → run24
 
 ver2（完成・`v2.0-complete`）の追跡ツリーを継承して本リポジトリを作成。
 **ver3 のスコープと実装順は `ARCHITECTURE.md` 12節が正本**（このファイルには進捗と未決だけを書く）。
