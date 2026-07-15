@@ -345,8 +345,8 @@ class TestMembraneModelIntegration(unittest.TestCase):
         case["membrane_model"] = {"tie": True}
         with redirect_stdout(io.StringIO()):
             best, gen_log, _ = run_bo(ss, case, _SmoothMock(), seed=51)
-        # seed は連続5変数（膜4 + COMP1_pout）+ 共有 MEMB_perm = 6 次元
-        self.assertEqual(len(best), 6)
+        # seed は連続4変数（膜2×2。COMP1 はブロワー固定＝変数なし）+ 共有 MEMB_perm = 5 次元
+        self.assertEqual(len(best), 5)
         lo, hi = T.continuous_variables(ss, {"tie": True})[0]["bounds"]
         self.assertGreaterEqual(best[0], lo - 1e-9)  # 先頭が MEMB_perm
         self.assertLessEqual(best[0], hi + 1e-9)
@@ -358,8 +358,8 @@ class TestMembraneModelIntegration(unittest.TestCase):
         case["membrane_model"] = {"tie": False}
         with redirect_stdout(io.StringIO()):
             best, gen_log, _ = run_bo(ss, case, _SmoothMock(), seed=52)
-        # 連続5変数（膜4 + COMP1_pout）+ MEMB1_perm + MEMB2_perm = 7 次元
-        self.assertEqual(len(best), 7)
+        # 連続4変数（膜2×2）+ MEMB1_perm + MEMB2_perm = 6 次元
+        self.assertEqual(len(best), 6)
 
 
 class TestPhasePatience(unittest.TestCase):
@@ -466,9 +466,9 @@ class TestCostObjective(unittest.TestCase):
             def evaluate_topology(self, topology, x_list):
                 out = []
                 for x in x_list:
-                    # cont vars = [COMP1_pout, M1_area, M1_pp, M2_area, M2_pp]
-                    # （seed・membrane_model なし。名前順で COMP1_pout が先頭）
-                    self.area_sums.append(float(x[1]) + float(x[3]))
+                    # cont vars = [M1_area, M1_pp, M2_area, M2_pp]
+                    # （seed・membrane_model なし。COMP1 はブロワー固定＝変数なし）
+                    self.area_sums.append(float(x[0]) + float(x[2]))
                     out.append(Metrics(specific_energy=300.0, purity=0.96, recovery=0.92))
                 return out
 
@@ -480,7 +480,7 @@ class TestCostObjective(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             best, gen_log, _ = run_bo(ss, self._cost_case(), mock, seed=61)
         # 全点 feasible → best は cost 最小 ＝ 膜面積合計が最小の観測
-        best_sum = best[1] + best[3]
+        best_sum = best[0] + best[2]
         self.assertAlmostEqual(best_sum, min(mock.area_sums), places=6)
 
     def test_energy_mode_unaffected(self) -> None:

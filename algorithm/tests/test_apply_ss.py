@@ -191,7 +191,7 @@ class TestAddUnit(unittest.TestCase):
                          {"type": "heater", "unit": "HEAT1"})
         self.assertEqual(new_ss["arcs"][("V11", "V4")], {"type": "process"})
         names = [cv["name"] for cv in T.continuous_variables(new_ss)]
-        self.assertEqual(len(names), 5)  # 膜2基×2 ＋ COMP1_pout（HEAT は変数を持たない）
+        self.assertEqual(len(names), 4)  # 膜2基×2（COMP1 はブロワー固定＝変数なし、HEAT も変数なし）
         T.validate(new_ss)
 
 

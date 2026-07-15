@@ -10,8 +10,8 @@
     "V6": {"role": "internal", "label": "MEMB2 retentate"},
     "V7": {"role": "product",  "label": "Product (CO2)"},
     "V8": {"role": "residue",  "label": "Residue (waste)"},
-    "V9": {"role": "internal", "label": "Feed mixer / COMP1 inlet (1 bar; recycles join here)"},
-    "V10": {"role": "internal", "label": "COMP1 outlet"}
+    "V9": {"role": "internal", "label": "Feed mixer / COMP1 inlet (1 bar; blower-only scenario)"},
+    "V10": {"role": "internal", "label": "COMP1 (blower, fixed 1.1 bar) outlet"}
   },
   "arcs": [
     {"from": "V0", "to": "V9", "type": "feed"},
@@ -32,10 +32,10 @@
       "inlet": "V9",
       "outlets": {"outlet": "V10"},
       "params": {
-        "outlet_pressure": 2.5
+        "outlet_pressure": 1.1
       },
       "bounds_override": {
-        "outlet_pressure": [1.1, 4.0]
+        "outlet_pressure": [1.1, 1.1]
       }
     },
     "MEMB1": {
