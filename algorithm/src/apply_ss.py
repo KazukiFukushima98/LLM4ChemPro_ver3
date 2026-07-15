@@ -32,7 +32,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(__file__))
 import topology as T  # noqa: E402
 from topology import allocate_candidate_id, allocate_vertex_id  # noqa: E402
-from unit_registry import STRUCTURE_TEMPLATES, get_outlet_ports  # noqa: E402
+from unit_registry import STRUCTURE_TEMPLATES, UNIT_BOUNDS, get_outlet_ports  # noqa: E402
 
 
 # ユニット種別ごとの「内部アーク」型（inlet→outlet 頂点間のアーク）。
@@ -47,6 +47,26 @@ INNER_ARC_TYPE: dict[str, dict[str, str]] = {
 
 class ApplyError(ValueError):
     """ss_change の適用中に検出した不整合。"""
+
+
+def _enforce_fixed_params(unit_type: str, unit: str, params: dict[str, Any]) -> None:
+    """固定パラメータ（UNIT_BOUNDS で lo==hi）の強制（2026-07-15）。
+
+    lo==hi のパラメータは GA/BO 変数にならず params の値がそのまま実機に効くため、
+    提案側が別の値を書くと campaign 定義（例: ブロワー=1.1 bar 固定）をすり抜ける。
+    未指定なら固定値を自動補完し、異なる値は明示エラーで拒否する。
+    """
+    for param, (lo, hi) in UNIT_BOUNDS.get(unit_type, {}).items():
+        if lo != hi:
+            continue
+        given = params.get(param)
+        if given is None:
+            params[param] = lo
+        elif float(given) != float(lo):
+            raise ApplyError(
+                f"{unit}: {param}={given} は固定値 {lo} 以外を取れない"
+                f"（UNIT_BOUNDS が lo==hi＝campaign で固定されたパラメータ）"
+            )
 
 
 # =========================================================
@@ -65,6 +85,7 @@ def op_add_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
         raise ApplyError(f"unit {unit!r} already exists")
     if inlet not in ss["vertices"]:
         raise ApplyError(f"inlet {inlet!r} not in vertices")
+    _enforce_fixed_params(unit_type, unit, params)
 
     ports = get_outlet_ports(unit_type)
     inner_map = INNER_ARC_TYPE.get(unit_type, {})
@@ -168,6 +189,7 @@ def op_add_gated_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
         raise ApplyError(f"feed_from {feed_from!r} not in vertices")
     if bypass_to not in ss["vertices"]:
         raise ApplyError(f"bypass_to {bypass_to!r} not in vertices")
+    _enforce_fixed_params(unit_type, unit, params)
 
     ports = get_outlet_ports(unit_type)
     inner_map = INNER_ARC_TYPE.get(unit_type, {})

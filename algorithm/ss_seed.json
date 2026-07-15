@@ -10,8 +10,10 @@
     "V6": {"role": "internal", "label": "MEMB2 retentate"},
     "V7": {"role": "product",  "label": "Product (CO2)"},
     "V8": {"role": "residue",  "label": "Residue (waste)"},
-    "V9": {"role": "internal", "label": "Feed mixer / COMP1 inlet (1 bar; blower-only scenario)"},
-    "V10": {"role": "internal", "label": "COMP1 (blower, fixed 1.1 bar) outlet"}
+    "V9": {"role": "internal", "label": "F1 pre-mixer / COMP1 inlet (recycles join here)"},
+    "V10": {"role": "internal", "label": "COMP1 (blower, fixed 1.1 bar) outlet"},
+    "V11": {"role": "internal", "label": "F2 pre-mixer / COMP2 inlet (recycles join here)"},
+    "V12": {"role": "internal", "label": "COMP2 (blower, fixed 1.1 bar) outlet"}
   },
   "arcs": [
     {"from": "V0", "to": "V9", "type": "feed"},
@@ -19,7 +21,9 @@
     {"from": "V10", "to": "V1", "type": "process"},
     {"from": "V1", "to": "V2", "type": "membrane_permeate",  "unit": "MEMB1"},
     {"from": "V1", "to": "V3", "type": "membrane_retentate", "unit": "MEMB1"},
-    {"from": "V2", "to": "V4", "type": "process"},
+    {"from": "V2", "to": "V11", "type": "process"},
+    {"from": "V11", "to": "V12", "type": "compressor", "unit": "COMP2"},
+    {"from": "V12", "to": "V4", "type": "process"},
     {"from": "V3", "to": "V8", "type": "residue"},
     {"from": "V4", "to": "V5", "type": "membrane_permeate",  "unit": "MEMB2"},
     {"from": "V4", "to": "V6", "type": "membrane_retentate", "unit": "MEMB2"},
@@ -31,6 +35,17 @@
       "type": "COMP",
       "inlet": "V9",
       "outlets": {"outlet": "V10"},
+      "params": {
+        "outlet_pressure": 1.1
+      },
+      "bounds_override": {
+        "outlet_pressure": [1.1, 1.1]
+      }
+    },
+    "COMP2": {
+      "type": "COMP",
+      "inlet": "V11",
+      "outlets": {"outlet": "V12"},
       "params": {
         "outlet_pressure": 1.1
       },

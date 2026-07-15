@@ -79,14 +79,19 @@ def is_tie_mode(membrane_model: dict[str, Any] | None) -> bool:
 #     case.yaml feed.totflow 参照。コストモデルが線形なので $/tCO2 はスケール不変）
 #   - p_permeate: 真空ポンプ吸引圧 0.1-1 bar（0.01 bar=10 mbar は工業的に非現実的。
 #     上限は駆動力ゼロを避けて 0.99）
-#   - COMP.outlet_pressure: 1-4 bar（feed 昇圧の現実的範囲）
+#   - COMP.outlet_pressure: ブロワー campaign（run26〜、2026-07-15 ユーザ決定）では
+#     [1.1, 1.1]＝固定（lo==hi は make_ga_variables が GA/BO 変数から除外する）。
+#     全膜入口を 1.1 bar に統一する Merkel/MTR 型シナリオの強制で、エージェントが
+#     後から追加する COMP も変数なしのブロワーになる。params に 1.1 以外を書く
+#     すり抜けは apply_ss の固定パラメータガードが拒否する。
+#     Lee 整合の昇圧可変 campaign（run25）の値 [1.0, 4.0] は f2424a1 参照。
 UNIT_BOUNDS: dict[str, dict[str, list[float]]] = {
     "MEMB": {
         "area":       [100000.0, 1500000.0],
         "p_permeate": [0.1, 0.99],
     },
     "COMP": {
-        "outlet_pressure": [1.0, 4.0],
+        "outlet_pressure": [1.1, 1.1],
     },
     # 膨張機（ver3 12.4）: GA 変数なし（出口圧は params.outlet_pressure 固定・既定 1 bar）。
     # 構造部品としてエージェントが高圧経路（昇圧後の残渣等）に配置し電力を回収する。

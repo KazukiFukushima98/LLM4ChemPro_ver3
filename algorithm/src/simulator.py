@@ -390,14 +390,18 @@ class AspenEvaluator:
                 return DetailedResult(metrics=Metrics.bad())
 
             # 旧 get_detailed_results:315-325 に相当。頂点IDで走査（n_vertices は使わない）。
+            # pressure_bar は検収用（2026-07-15）: ブロワー campaign の「全膜入口 1.1 bar」を
+            # run 後に実測圧で確認する運用のため記録する（record-only）。
             stream_results: dict = {}
             for vid, vdef in topology["vertices"].items():
                 co2_frac = self._safe(aspen, rf"\Data\Streams\{vid}\Output\MOLEFRAC\MIXED\CARBO-01")
                 co2_mf   = self._safe(aspen, rf"\Data\Streams\{vid}\Output\MOLEFLOW\MIXED\CARBO-01")
+                pres     = self._safe(aspen, rf"\Data\Streams\{vid}\Output\PRES_OUT\MIXED")
                 if co2_frac is not None:
                     stream_results[vid] = {
                         "CO2_molfrac":  co2_frac,
                         "CO2_moleflow": co2_mf,
+                        "pressure_bar": pres,
                         "description":  vdef.get("label", vid),
                     }
 

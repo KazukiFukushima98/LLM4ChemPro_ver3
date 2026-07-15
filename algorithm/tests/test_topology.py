@@ -828,8 +828,8 @@ class TestAllocateIds(unittest.TestCase):
         """id_counters の無い旧形式（ss_seed.json 等）は現存最大から初期化（後方互換）。"""
         if not os.path.exists(SEED_PATH):
             self.skipTest(f"seed not found at {SEED_PATH}")
-        ss = T.load_ss(SEED_PATH)  # V0..V10（COMP1 入り seed）、候補なし
-        self.assertEqual(T.allocate_vertex_id(ss), "V11")
+        ss = T.load_ss(SEED_PATH)  # V0..V12（ブロワー2基入り seed）、候補なし
+        self.assertEqual(T.allocate_vertex_id(ss), "V13")
         self.assertEqual(T.allocate_candidate_id(ss), "q_1")
 
 
