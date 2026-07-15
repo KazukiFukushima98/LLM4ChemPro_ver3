@@ -1,0 +1,199 @@
+{
+  "_provenance": {
+    "run": "run26",
+    "best_iteration": "iter_006",
+    "date": "2026-07-15",
+    "note": "ブロワーシナリオ（全膜入口 1.1 bar 固定・COMP は GA 変数外）での SST。構造・数値は iterations の results.json / ss_snapshot.json より。permeance 1 GPU = 2.70677e-3 m3(STP)/(m2 h bar)、α は Robeson 2008 上界導出。"
+  },
+  "performance": {
+    "CO2_purity": 0.954332606,
+    "CO2_recovery": 0.9082867828043218,
+    "cost_usd_per_tCO2": 61.292526208770795,
+    "specific_energy_kWh_tCO2": 465.6281598672608,
+    "total_pressure_equipment_kW": 224160.74936,
+    "targets": {
+      "purity_min": 0.95,
+      "recovery_min": 0.9
+    },
+    "feasible": true
+  },
+  "units": {
+    "MEMB1": {
+      "area_m2": 1176913,
+      "p_permeate_bar": 0.1,
+      "permeance_GPU": 6000,
+      "alpha_CO2_N2": 42.8
+    },
+    "MEMB2": {
+      "area_m2": 967300,
+      "p_permeate_bar": 0.1,
+      "permeance_GPU": 537,
+      "alpha_CO2_N2": 98.8
+    },
+    "MEMB3": {
+      "area_m2": 592420,
+      "p_permeate_bar": 0.1,
+      "permeance_GPU": 2762,
+      "alpha_CO2_N2": 56.0
+    },
+    "MEMB4": {
+      "area_m2": 1016053,
+      "p_permeate_bar": 0.1,
+      "permeance_GPU": 6000,
+      "alpha_CO2_N2": 42.8
+    },
+    "COMP1": {
+      "type": "blower",
+      "outlet_bar": 1.1,
+      "fixed": true
+    },
+    "COMP2": {
+      "type": "blower",
+      "outlet_bar": 1.1,
+      "fixed": true
+    }
+  },
+  "streams": {
+    "V0": {
+      "pressure_bar": 1.0,
+      "co2_molfrac": 0.15,
+      "co2_kmol_h": 12046.0,
+      "total_kmol_h": 80307.0,
+      "description": "Feed (CO2 15%, post-combustion)"
+    },
+    "V1": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.1679,
+      "co2_kmol_h": 21117.0,
+      "total_kmol_h": 125753.2,
+      "description": "MEMB1 inlet (after COMP1)"
+    },
+    "V2": {
+      "pressure_bar": 1.0,
+      "co2_molfrac": 0.4791,
+      "co2_kmol_h": 15229.1,
+      "total_kmol_h": 31787.9,
+      "description": "MEMB1 permeate (after VP1 to 1 bar)"
+    },
+    "V3": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.0627,
+      "co2_kmol_h": 5887.9,
+      "total_kmol_h": 93965.3,
+      "description": "MEMB1 retentate"
+    },
+    "V4": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.4631,
+      "co2_kmol_h": 17291.8,
+      "total_kmol_h": 37339.8,
+      "description": "MEMB2 inlet (after mixer)"
+    },
+    "V5": {
+      "pressure_bar": 1.0,
+      "co2_molfrac": 0.9543,
+      "co2_kmol_h": 10941.3,
+      "total_kmol_h": 11464.8,
+      "description": "MEMB2 permeate (after VP2 to 1 bar)"
+    },
+    "V6": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.2454,
+      "co2_kmol_h": 6350.6,
+      "total_kmol_h": 25875.0,
+      "description": "MEMB2 retentate"
+    },
+    "V7": {
+      "pressure_bar": 1.0,
+      "co2_molfrac": 0.9543,
+      "co2_kmol_h": 10941.3,
+      "total_kmol_h": 11464.8,
+      "description": "Product (CO2)"
+    },
+    "V8": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.016,
+      "co2_kmol_h": 1104.9,
+      "total_kmol_h": 68842.2,
+      "description": "Residue (waste)"
+    },
+    "V9": {
+      "pressure_bar": 1.0,
+      "co2_molfrac": 0.1679,
+      "co2_kmol_h": 21117.0,
+      "total_kmol_h": 125753.2,
+      "description": "F1 pre-mixer / COMP1 inlet (recycles join here)"
+    },
+    "V10": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.1679,
+      "co2_kmol_h": 21117.0,
+      "total_kmol_h": 125753.2,
+      "description": "COMP1 (blower, fixed 1.1 bar) outlet"
+    },
+    "V11": {
+      "pressure_bar": 1.0,
+      "co2_molfrac": 0.4631,
+      "co2_kmol_h": 17291.8,
+      "total_kmol_h": 37339.8,
+      "description": "F2 pre-mixer / COMP2 inlet (recycles join here)"
+    },
+    "V12": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.4631,
+      "co2_kmol_h": 17291.8,
+      "total_kmol_h": 37339.8,
+      "description": "COMP2 (blower, fixed 1.1 bar) outlet"
+    },
+    "V16": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.0627,
+      "co2_kmol_h": 5887.9,
+      "total_kmol_h": 93965.3,
+      "description": "MEMB3 inlet (gated)"
+    },
+    "V17": {
+      "pressure_bar": 1.0,
+      "co2_molfrac": 0.3715,
+      "co2_kmol_h": 2062.7,
+      "total_kmol_h": 5551.9,
+      "description": "MEMB3 permeate outlet"
+    },
+    "V18": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.0433,
+      "co2_kmol_h": 3825.2,
+      "total_kmol_h": 88413.3,
+      "description": "MEMB3 retentate outlet"
+    },
+    "V19": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.0433,
+      "co2_kmol_h": 3825.2,
+      "total_kmol_h": 88413.3,
+      "description": "MEMB4 inlet (gated)"
+    },
+    "V20": {
+      "pressure_bar": 1.0,
+      "co2_molfrac": 0.139,
+      "co2_kmol_h": 2720.3,
+      "total_kmol_h": 19571.1,
+      "description": "MEMB4 permeate outlet"
+    },
+    "V21": {
+      "pressure_bar": 1.1,
+      "co2_molfrac": 0.016,
+      "co2_kmol_h": 1104.9,
+      "total_kmol_h": 68842.2,
+      "description": "MEMB4 retentate outlet"
+    }
+  },
+  "energy_breakdown_kW": {
+    "VP1": 96568.2275,
+    "VP2": 33527.7407,
+    "VP3": 17046.2217,
+    "VP4": 61703.9539,
+    "COMP1": 11754.5023,
+    "COMP2": 3560.10326
+  }
+}
