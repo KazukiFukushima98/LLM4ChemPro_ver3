@@ -148,6 +148,9 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="append to an existing run directory")
     parser.add_argument("--pop", type=int, default=None,
                         help="GA population size override (also suffixes the run name)")
+    parser.add_argument("--selection", choices=["deb", "penalty"], default="deb",
+                        help="GA selection rule: Deb's parameter-free feasibility rule "
+                             "(default) or the legacy penalized fitness")
     parser.add_argument("--max-hours", type=float, default=None,
                         help="wall-clock budget; the GA stops at the first generation "
                              "boundary past this. With it, n_gen is only a safety cap.")
@@ -157,6 +160,8 @@ def main() -> None:
 
     seed_path = os.path.join(HERE, f"ss_{args.ss}.json")
     run_name = f"baseline_{args.ss}_{args.optimizer}"
+    if args.optimizer == "ga":
+        run_name += f"_{args.selection}"
     if args.pop is not None:
         run_name += f"_pop{args.pop}"
     if args.seed != 1:
@@ -177,6 +182,7 @@ def main() -> None:
         case["bo"] = dict(PILOT_BO if args.pilot else FULL_BO)
     else:
         case["ga"] = dict(PILOT_GA if args.pilot else FULL_GA)
+        case["ga"]["selection"] = args.selection
         if args.pop is not None:
             case["ga"]["pop_size"] = args.pop
         if args.max_hours is not None:

@@ -106,7 +106,17 @@ def run_ga_onehot(
     # The generation in progress when the limit passes always completes, so the
     # population is never half-evaluated.
     max_wall_sec = float(ga_cfg.get("max_wall_sec", 0) or 0)
+    # Selection rule (baseline protocol 2026-07-17): "deb" (default) uses Deb's
+    # parameter-free feasibility rule — feasible beats infeasible, infeasibles
+    # compare by constraint violation, feasibles compare by objective (cost).
+    # This mirrors the CBO's feasibility-first selection and removes the
+    # penalty-weight dependence that let a cheap infeasible solution win the
+    # penalty fitness (observed in baseline_lee3_ga_pop40, 2026-07-17).
+    # "penalty" keeps the legacy penalized-fitness tournament.
+    selection = str(ga_cfg.get("selection", "deb"))
     targets  = case["optimization_targets"]
+    purity_min   = float(targets["purity_min"])
+    recovery_min = float(targets["recovery_min"])
 
     # ---- Objective switch (identical to ga.py) ----
     cost_mode = str(targets.get("objective", "")).strip() == "minimize_cost"
@@ -127,16 +137,20 @@ def run_ga_onehot(
 
     rng = random.Random(seed)
 
-    # ---- individual = {"genes": [int]*G, "x": [float]*n, "fit": float | None} ----
+    # ---- individual = {"genes": [int]*G, "x": [float]*n,
+    #                    "fit": float | None,   penalized fitness (logging / legacy selection)
+    #                    "viol": float | None,  constraint shortfall (0 = feasible, inf = BAD)
+    #                    "obj":  float | None}  raw objective (cost) ----
     def new_individual() -> dict:
         return {
             "genes": [rng.randrange(len(g)) for g in groups],
             "x": [rng.uniform(lo, hi) for lo, hi in cont_bounds],
-            "fit": None,
+            "fit": None, "viol": None, "obj": None,
         }
 
     def clone(ind: dict) -> dict:
-        return {"genes": list(ind["genes"]), "x": list(ind["x"]), "fit": ind["fit"]}
+        return {"genes": list(ind["genes"]), "x": list(ind["x"]),
+                "fit": ind["fit"], "viol": ind["viol"], "obj": ind["obj"]}
 
     def clip(ind: dict) -> None:
         for k, (lo, hi) in enumerate(cont_bounds):
@@ -169,12 +183,30 @@ def run_ga_onehot(
             if rng.random() < 0.5:
                 ind["x"][k] += rng.gauss(0, sigma_cont[k])
 
+    def deb_key(ind: dict) -> tuple:
+        """Sort key implementing Deb's feasibility rule (smaller is better).
+
+        feasible (viol == 0): (0, 0, objective)  — compared by cost
+        infeasible          : (1, viol, 0)       — compared by violation
+        unevaluated / BAD   : viol = inf, so it loses to every real point
+        """
+        viol = ind["viol"] if ind["viol"] is not None else float("inf")
+        if viol <= 0.0:
+            return (0, 0.0, ind["obj"])
+        return (1, viol, 0.0)
+
+    def penalty_key(ind: dict):
+        return ind["fit"] if ind["fit"] is not None else float("inf")
+
+    sel_key = deb_key if selection == "deb" else penalty_key
+
     def tournament(pop: list[dict], k: int) -> list[dict]:
-        # Equivalent to tools.selTournament(tournsize=3) (an invalid fitness counts as inf)
+        # Equivalent to tools.selTournament(tournsize=3); the comparison rule is
+        # sel_key (Deb's feasibility rule by default, legacy penalty fitness otherwise)
         out = []
         for _ in range(k):
             cands = [pop[rng.randrange(len(pop))] for _ in range(3)]
-            out.append(min(cands, key=lambda i: i["fit"] if i["fit"] is not None else float("inf")))
+            out.append(min(cands, key=sel_key))
         return out
 
     def evaluate(individuals: list[dict]) -> int:
@@ -196,6 +228,13 @@ def run_ga_onehot(
             for ind, m in zip(inds, metrics_list):
                 obj = _objective(m, ind["x"], topology)
                 ind["fit"] = _fitness(obj, m.purity, m.recovery, targets, penalty_w)
+                if m.specific_energy >= BAD_VALUE:
+                    ind["viol"], ind["obj"] = float("inf"), float("inf")
+                else:
+                    # Same shortfall as the CBO bootstrap phase (bo.py):
+                    # max(0, pi_min - pi) + max(0, rho_min - rho)
+                    ind["viol"] = max(0.0, purity_min - m.purity) + max(0.0, recovery_min - m.recovery)
+                    ind["obj"] = float(obj)
             total += len(inds)
         return total
 
@@ -204,8 +243,7 @@ def run_ga_onehot(
     pop = [new_individual() for _ in range(pop_size)]
     n_evals = evaluate(pop)
 
-    best = min(pop, key=lambda i: i["fit"])
-    best = clone(best)
+    best = clone(min(pop, key=sel_key))
     gen_log: list[dict] = []
 
     for gen in range(n_gen):
@@ -225,14 +263,14 @@ def run_ga_onehot(
                 crossover(c1, c2)
                 clip(c1)
                 clip(c2)
-                c1["fit"] = None
-                c2["fit"] = None
+                c1["fit"] = c1["viol"] = c1["obj"] = None
+                c2["fit"] = c2["viol"] = c2["obj"] = None
 
         for mut in offspring:
             if rng.random() < 0.3:
                 mutate(mut)
                 clip(mut)
-                mut["fit"] = None
+                mut["fit"] = mut["viol"] = mut["obj"] = None
 
         invalid = [ind for ind in offspring if ind["fit"] is None]
         _t_eval0 = time.monotonic()
@@ -240,18 +278,29 @@ def run_ga_onehot(
         t_eval_sec = round(time.monotonic() - _t_eval0, 2)   # wall-clock evaluation time of this generation
 
         pop = offspring
-        gen_best = min(pop, key=lambda i: i["fit"])
-        if gen_best["fit"] < best["fit"]:
+        gen_best = min(pop, key=sel_key)
+        if sel_key(gen_best) < sel_key(best):
             best = clone(gen_best)
-        # Elitism: replace the worst with a clone of the best (identical to ga.py)
-        worst_idx = max(range(len(pop)),
-                        key=lambda i: pop[i]["fit"] if pop[i]["fit"] is not None else float("inf"))
+        # Elitism: replace the worst with a clone of the best (identical to ga.py,
+        # under the active selection rule)
+        worst_idx = max(range(len(pop)), key=lambda i: sel_key(pop[i]))
         pop[worst_idx] = clone(best)
         best_fit = min(ind["fit"] for ind in pop if ind["fit"] is not None)
-        gen_log.append({"gen": gen + 1, "best_fitness": best_fit,
-                        "t": round(time.monotonic() - t0, 1),
-                        "t_eval": t_eval_sec})
-        print(f"  Gen {gen+1:2d}: best={best_fit:.1f}")
+        entry = {"gen": gen + 1, "best_fitness": best_fit,
+                 "t": round(time.monotonic() - t0, 1),
+                 "t_eval": t_eval_sec}
+        # Feasibility reporting (same axis as the CBO's feasibility-first best):
+        # best-so-far constraint shortfall and best-so-far feasible objective
+        if best["viol"] is not None and best["viol"] != float("inf"):
+            entry["min_shortfall"] = round(best["viol"], 4)
+        if best["viol"] == 0.0:
+            entry["feasible_obj_min"] = round(best["obj"], 3)
+            status = f"feasible_obj_min={best['obj']:.1f}"
+        else:
+            status = f"no feasible yet, min_shortfall={best['viol']:.3f}" \
+                if best["viol"] not in (None, float("inf")) else "no valid eval yet"
+        gen_log.append(entry)
+        print(f"  Gen {gen+1:2d}: best={best_fit:.1f}  ({status})")
 
     # Return a run_ga compatible full chromosome (0/1 binaries + continuous)
     best_chromosome = genes_to_bits(best["genes"], groups, n_binary) + list(best["x"])
