@@ -23,8 +23,16 @@ evaluations, clearly more than SST (1,449 evaluations measured in run24), and
 patience is disabled (0), i.e. no early termination. This setting leaves no room
 for the excuse that "there was not enough time".
 
+Wall-clock protocol (user decision, 2026-07-16, new-model campaign): the primary
+budget is wall-clock — fix the population size and cut off at a GENERATION
+BOUNDARY once --max-hours (default 6.5 h, matching SST run30's 6.1 h) has
+elapsed. Two population patterns (--pop 40 / --pop 100) are run per SS to show
+the choice of population is not the reason for the outcome. n_gen is then only
+a safety cap.
+
 usage (from algorithm/):
     uv run python baseline/run_baseline.py --ss lee2 --optimizer bo [--pilot] [--force]
+    uv run python baseline/run_baseline.py --ss lee3 --optimizer ga --pop 40 --max-hours 6.5
 """
 
 from __future__ import annotations
@@ -138,12 +146,23 @@ def main() -> None:
     parser.add_argument("--pilot", action="store_true", help="check the plumbing on a reduced budget")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--force", action="store_true", help="append to an existing run directory")
+    parser.add_argument("--pop", type=int, default=None,
+                        help="GA population size override (also suffixes the run name)")
+    parser.add_argument("--max-hours", type=float, default=None,
+                        help="wall-clock budget; the GA stops at the first generation "
+                             "boundary past this. With it, n_gen is only a safety cap.")
     args = parser.parse_args()
 
     import run_iteration as RI
 
     seed_path = os.path.join(HERE, f"ss_{args.ss}.json")
-    run_name = f"baseline_{args.ss}_{args.optimizer}" + ("_pilot" if args.pilot else "")
+    run_name = f"baseline_{args.ss}_{args.optimizer}"
+    if args.pop is not None:
+        run_name += f"_pop{args.pop}"
+    if args.seed != 1:
+        run_name += f"_seed{args.seed}"
+    if args.pilot:
+        run_name += "_pilot"
     base_dir = os.path.join(ALGO, "runs", run_name)
 
     if os.path.exists(os.path.join(base_dir, "iterations")) and not args.force:
@@ -158,15 +177,26 @@ def main() -> None:
         case["bo"] = dict(PILOT_BO if args.pilot else FULL_BO)
     else:
         case["ga"] = dict(PILOT_GA if args.pilot else FULL_GA)
+        if args.pop is not None:
+            case["ga"]["pop_size"] = args.pop
+        if args.max_hours is not None:
+            case["ga"]["max_wall_sec"] = args.max_hours * 3600.0
+            # In wall-clock mode n_gen is only a safety cap, far above what the
+            # budget can reach (pilot keeps its small n_gen for quick plumbing checks)
+            if not args.pilot:
+                case["ga"]["n_gen"] = 100_000
 
     ss = T.load_ss(seed_path)
     n_bin = len(T.binary_variables(ss))
     n_cont = len(T.continuous_variables(ss, case.get("membrane_model")))
-    budget = (case["bo"]["n_init"] + case["bo"]["n_iter"] * case["bo"]["q_batch"]
-              if args.optimizer == "bo"
-              else case["ga"]["pop_size"] * (case["ga"]["n_gen"] + 1))
+    if args.optimizer == "ga" and args.max_hours is not None:
+        budget = f"wall-clock {args.max_hours}h (generation-boundary cutoff)"
+    elif args.optimizer == "bo":
+        budget = f"~{case['bo']['n_init'] + case['bo']['n_iter'] * case['bo']['q_batch']} evaluations"
+    else:
+        budget = f"~{case['ga']['pop_size'] * (case['ga']['n_gen'] + 1)} evaluations"
     print(f"[baseline] SS={args.ss} ({n_bin} binary, {n_cont} continuous), "
-          f"optimizer={args.optimizer}, budget ~= {budget} evaluations, pilot={args.pilot}")
+          f"optimizer={args.optimizer}, budget = {budget}, pilot={args.pilot}")
 
     # Runtime substitution (confined to this script; src is unchanged)
     if args.optimizer == "bo":

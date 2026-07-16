@@ -101,6 +101,11 @@ def run_ga_onehot(
     ga_cfg   = case["ga"]
     pop_size = int(ga_cfg["pop_size"])
     n_gen    = int(ga_cfg["n_gen"])
+    # Wall-clock budget (baseline protocol 2026-07-16): stop at a GENERATION
+    # BOUNDARY once the elapsed time exceeds this. 0/absent = no wall limit.
+    # The generation in progress when the limit passes always completes, so the
+    # population is never half-evaluated.
+    max_wall_sec = float(ga_cfg.get("max_wall_sec", 0) or 0)
     targets  = case["optimization_targets"]
 
     # ---- Objective switch (identical to ga.py) ----
@@ -204,6 +209,15 @@ def run_ga_onehot(
     gen_log: list[dict] = []
 
     for gen in range(n_gen):
+        elapsed = time.monotonic() - t0
+        if max_wall_sec and elapsed >= max_wall_sec:
+            if gen_log:
+                gen_log[-1]["early_stop"] = (
+                    f"wall_clock {elapsed / 3600:.2f}h >= {max_wall_sec / 3600:.2f}h"
+                )
+            print(f"  [GA] wall-clock limit reached at generation boundary "
+                  f"({elapsed / 3600:.2f}h >= {max_wall_sec / 3600:.2f}h) -> stop")
+            break
         offspring = [clone(ind) for ind in tournament(pop, len(pop))]
 
         for c1, c2 in zip(offspring[::2], offspring[1::2]):
