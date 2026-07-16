@@ -9,6 +9,7 @@ AspenEvaluator（フェーズ4a）:
 """
 
 import glob
+import math
 import os
 import sys
 import time
@@ -25,6 +26,38 @@ from unit_registry import robeson_alpha                                     # no
 
 class AspenCrashError(RuntimeError):
     """Raised when Aspen crashes (detected via new .dmp file in dmp_dir)."""
+
+
+# HX（自動冷却器）面積算出の定数（Lee 2018 §2.3。2026-07-16 HX コスト組み込み）
+HX_U_W_M2K = 132.5     # 総括伝熱係数 [W/m2K]（ガス–冷却水系の文献中央値）
+HX_CW_IN_C = 20.0      # 冷却水入口 [°C]
+HX_CW_OUT_C = 25.0     # 冷却水出口 [°C]
+HX_GAS_TOUT_C = 35.0   # ガス出口 [°C]（AUTO_COOLER_TEMP_C と同値・膜運転温度）
+# QCALC の単位換算: この .apw の unit set は動力(WNET)=kW だが熱流(QCALC)=cal/s。
+# 実機検証（2026-07-16）: VP1 の QCALC/WNET = 4.1868 ちょうど＝IT カロリー係数で確定
+# （VP は断熱圧縮→35°C 全戻し冷却なので duty≈work になる物理を利用した検算）。
+QCALC_CAL_S_TO_KW = 4.1868e-3
+
+
+def hx_area_m2_from_duty(q_kw: float | None, t_in_c: float | None) -> float:
+    """冷却器1基の伝熱面積 [m2]（Lee Eq.5/6・向流 LMTD）。
+
+    q_kw   : 冷却器 duty [kW]（Aspen QCALC。冷却は負）
+    t_in_c : ガス入口温度 [°C]（冷却器手前の中間ストリーム温度）
+
+    冷却として成立しないケース（duty≥0＝加熱側、ガス入口が 35°C 以下、
+    冷却水出口 25°C 以下）は 0 を返す（ブロワー出口が 35°C 未満のとき等）。
+    """
+    if q_kw is None or t_in_c is None:
+        return 0.0
+    if q_kw >= 0.0 or t_in_c <= HX_GAS_TOUT_C:
+        return 0.0
+    dt1 = t_in_c - HX_CW_OUT_C            # 高温端: ガス入口 − 冷却水出口
+    dt2 = HX_GAS_TOUT_C - HX_CW_IN_C      # 低温端: 35 − 20 = 15
+    if dt1 <= 0.0:
+        return 0.0
+    lmtd = dt2 if abs(dt1 - dt2) < 1e-9 else (dt1 - dt2) / math.log(dt1 / dt2)
+    return abs(q_kw) * 1000.0 / (HX_U_W_M2K * lmtd)   # kW → W
 
 
 def build_unit_params(
@@ -210,7 +243,19 @@ class AspenEvaluator:
             if udef.get("type") in ("COMP", "EXP") and uname not in energy_blocks:
                 energy_blocks.append(uname)
 
-        return aspen, energy_blocks
+        # coolers = 自動冷却器 (block, 入口中間ストリーム)。HX コスト（Lee Eq.5/6）の
+        # 面積算出用（2026-07-16）。builder の命名規則: VP{n}→HXV{n}/VPO{n}、
+        # COMP{n}→HXC{n}/HCI{n}。EXP は冷却器なし（膨張は温度が下がる）。
+        coolers: list[tuple[str, str]] = []
+        for vp in vp_map.values():
+            n = vp[2:]                      # "VP3" → "3"
+            coolers.append((f"HXV{n}", f"VPO{n}"))
+        for uname, udef in topology["units"].items():
+            if udef.get("type") == "COMP":
+                n = "".join(ch for ch in uname if ch.isdigit())
+                coolers.append((f"HXC{n}", f"HCI{n}"))
+
+        return aspen, energy_blocks, coolers
 
     def _product_vid(self, topology: dict) -> str | None:
         """product role の頂点IDを返す（なければ None）。"""
@@ -220,7 +265,8 @@ class AspenEvaluator:
         )
 
     def _extract_metrics(
-        self, aspen, product_vid: str, energy_blocks: list[str]
+        self, aspen, product_vid: str, energy_blocks: list[str],
+        coolers: list[tuple[str, str]] | None = None,
     ) -> Metrics:
         """収束済み Aspen から Metrics を抽出する。"""
         purity  = self._safe(aspen, rf"\Data\Streams\{product_vid}\Output\MOLEFRAC\MIXED\CARBO-01", 0.0)
@@ -234,6 +280,14 @@ class AspenEvaluator:
             if w:
                 energy_bd[blk] = w
                 total_kw += w
+
+        # 自動冷却器の伝熱面積合計（Lee Eq.5/6・HX コスト用。2026-07-16）
+        hx_area = 0.0
+        for blk, inlet in (coolers or []):
+            q_cal_s = self._safe(aspen, rf"\Data\Blocks\{blk}\Output\QCALC")
+            t_in = self._safe(aspen, rf"\Data\Streams\{inlet}\Output\TEMP_OUT\MIXED")
+            q_kw = None if q_cal_s is None else q_cal_s * QCALC_CAL_S_TO_KW
+            hx_area += hx_area_m2_from_duty(q_kw, t_in)
 
         if not v0_mf or v0_mf <= 0 or not prod_mf or prod_mf <= 0:
             return Metrics.bad()
@@ -270,6 +324,7 @@ class AspenEvaluator:
             purity=purity,
             recovery=recovery,
             energy_breakdown=energy_bd,
+            hx_area_m2=hx_area,
         )
 
     # ------------------------------------------------------------------
@@ -317,7 +372,7 @@ class AspenEvaluator:
                 emit_bad_rest()
                 return results
 
-            aspen, energy_blocks = self._build(topology)
+            aspen, energy_blocks, coolers = self._build(topology)
             if aspen is None:
                 emit_bad_rest()
                 return results
@@ -330,7 +385,7 @@ class AspenEvaluator:
                     unit_params = build_unit_params(x, cont_vars, topology, membrane_model)
                     set_continuous_variables(aspen, unit_params)
                     run_aspen_with_timeout(aspen, timeout=timeout_eval, dmp_dir=self._dmp_dir)
-                    emit(self._extract_metrics(aspen, product_vid, energy_blocks))
+                    emit(self._extract_metrics(aspen, product_vid, energy_blocks, coolers))
                     continue
                 except (AspenCrashError, TimeoutError):
                     pass  # → 下の再ビルド処理へ
@@ -351,7 +406,7 @@ class AspenEvaluator:
                     emit_bad_rest()
                     break
                 kill_aspen_image()
-                aspen, energy_blocks = self._build(topology)
+                aspen, energy_blocks, coolers = self._build(topology)
                 if aspen is None:
                     emit_bad_rest()
                     break
@@ -376,7 +431,7 @@ class AspenEvaluator:
             if product_vid is None:
                 return DetailedResult(metrics=Metrics.bad())
 
-            aspen, energy_blocks = self._build(topology)
+            aspen, energy_blocks, coolers = self._build(topology)
             if aspen is None:
                 return DetailedResult(metrics=Metrics.bad())
 
@@ -405,5 +460,5 @@ class AspenEvaluator:
                         "description":  vdef.get("label", vid),
                     }
 
-            metrics = self._extract_metrics(aspen, product_vid, energy_blocks)
+            metrics = self._extract_metrics(aspen, product_vid, energy_blocks, coolers)
             return DetailedResult(metrics=metrics, stream_results=stream_results)

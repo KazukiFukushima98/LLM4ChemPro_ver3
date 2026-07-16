@@ -12,7 +12,9 @@ feed:
   totflow: 80307.0        # kmol/h. Lee et al. (2018) の 600MWe 石炭火力排ガス
                           # 500 Nm³/s = 22,307.5 mol/s 相当。膜面積 bounds（Lee の
                           # 値のまま）と整合するスケール（2026-07-10 ユーザ決定）。
-  co2_frac: 0.15          # post-combustion. For DAC, set ~0.00042 (420 ppm).
+  co2_frac: 0.13          # post-combustion（石炭火力排ガス）。Lee et al. (2018) の feed 組成
+                          # （文献[3] の 13 mol%）に整合（2026-07-16 ユーザ決定。旧値 0.15 は
+                          # run24〜26 で使用）。DAC なら ~0.00042 (420 ppm)。
   temp: 25.0              # °C. Feed temperature.
   pressure: 1.0           # bar. Feed pressure.
   basis: MOLE-FRAC        # composition basis. FLOWBASE=MASS かつ BASIS=MOLE-FRAC の組み合わせ
@@ -37,7 +39,9 @@ penalty_weight: 100000.0  # PENALTY_W. Quadratic penalty on purity/recovery shor
 
 # ver3 12.2: 経済定数（Lee et al. 2018 Table 1。人間管理）。
 # F_obj = (capital_charge · installation_factor · C_TCC) / (M_CO2 · t_op) + E·Ce + penalty
-# 熱交換器コスト（Chx）はフローシートに冷却器を持たないため省略（2026-07-10 決定）。
+# 熱交換器コスト（Chx）は 2026-07-16 に組み込み（Lee §2.3: U=132.5 W/m2K・冷却水 20→25°C・
+# 向流 LMTD・ガス出口 35°C。面積は simulator が自動冷却器 HXV/HXC の duty から算出）。
+# run24〜26 は HX なしの旧目的関数で最適化された値である点に注意。
 # 圧力機器の CAPEX は C_unit × |WNET|（電気動力そのまま・η で割らない）。Lee Fig.3/4 の
 # 4設計の再現計算で論文 C_cap と −2% 前後（≒HX 省略分）の一致を確認済み（2026-07-10。
 # Eq.16 の「/η」は等エントロピー仕事→実動力の換算で、Aspen WNET は既に実動力）。
@@ -46,6 +50,7 @@ economics:
   compressor_cost: 670.0          # $/kW
   vacuum_pump_cost: 1341.0        # $/kW（auto-VP に適用）
   expander_cost: 500.0            # $/kW（12.4 の膨張機実装後に効く。WNET<0 で判別）
+  hx_cost: 300.0                  # $/m2（冷却器。Lee Eq.16 C_hx。2026-07-16 組み込み）
   installation_factor: 1.6        # f_in
   capital_charge_rate: 0.2        # /y（年間資本賦課率 20%）
   electricity_cost: 0.04          # $/kWh

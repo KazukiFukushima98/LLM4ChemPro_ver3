@@ -1,7 +1,7 @@
 {
   "iteration": 0,
   "vertices": {
-    "V0": {"role": "feed",     "label": "Feed (CO2 15%, post-combustion)"},
+    "V0": {"role": "feed",     "label": "Feed (CO2 13%, post-combustion)"},
     "V1": {"role": "internal", "label": "MEMB1 inlet (after COMP1)"},
     "V2": {"role": "internal", "label": "MEMB1 permeate (after VP1 to 1 bar)"},
     "V3": {"role": "internal", "label": "MEMB1 retentate"},

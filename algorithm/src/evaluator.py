@@ -33,6 +33,7 @@ ECONOMICS_DEFAULTS: dict[str, float] = {
     "compressor_cost": 670.0,       # $/kW
     "vacuum_pump_cost": 1341.0,     # $/kW
     "expander_cost": 500.0,         # $/kW（12.4 で膨張機実装後に効く）
+    "hx_cost": 300.0,               # $/m2（冷却器。Lee Eq.16 C_hx。2026-07-16 組み込み）
     "installation_factor": 1.6,     # f_in（総 CAPEX に乗算）
     "capital_charge_rate": 0.2,     # /y（年間資本賦課率）
     "electricity_cost": 0.04,       # $/kWh
@@ -81,15 +82,17 @@ def cost_per_tco2(
     membrane_areas: dict[str, float],
     case: dict[str, Any],
 ) -> float:
-    """年間換算 CO2 回収コスト [$/tCO2] を合成する（Lee 2018 Eq.15/16、HX 項は省略）。
+    """年間換算 CO2 回収コスト [$/tCO2] を合成する（Lee 2018 Eq.15/16、HX 項込み）。
 
         cost = (capital_charge · f_in · C_TCC) / (M_CO2 · t_op) + E · Ce
-        C_TCC = Σ_memb Cm·A + Σ_blk C_unit(blk) · |WNET_blk|
+        C_TCC = Σ_memb Cm·A + Σ_blk C_unit(blk) · |WNET_blk| + Chx · A_hx
         M_CO2 = recovery × feed CO2 質量流量 [t/h]
         E     = 比エネルギー [kWh/tCO2]（OPEX/tCO2 = E · Ce と等価）
 
     WNET は電気動力そのものとして扱い η では割らない（ECONOMICS_DEFAULTS 注2。
-    Lee Fig.3/4 の4設計で論文 C_cap との一致を確認済み・差 −2% ≒ HX 省略分）。
+    Lee Fig.3/4 の4設計で論文 C_cap との一致を確認済み・差 −2% ≒ HX 省略分だった）。
+    A_hx は simulator が Lee Eq.5/6（U=132.5 W/m2K・冷却水 20→25°C・向流 LMTD）で
+    冷却器ブロックから算出して Metrics.hx_area_m2 に載せる（2026-07-16 組み込み）。
 
     Parameters
     ----------
@@ -115,6 +118,7 @@ def cost_per_tco2(
         _pressure_unit_cost_per_kw(blk, w, econ) * abs(float(w))
         for blk, w in metrics.energy_breakdown.items()
     )
+    c_tcc += float(econ["hx_cost"]) * float(getattr(metrics, "hx_area_m2", 0.0))
 
     annual_capex = float(econ["capital_charge_rate"]) * float(econ["installation_factor"]) * c_tcc
     capex_per_t  = annual_capex / (m_co2 * float(econ["operating_hours"]))
@@ -154,6 +158,8 @@ class Metrics:
     purity: float                                 # CO2 mol fraction [0, 1]
     recovery: float                               # CO2 recovery [0, 1]
     energy_breakdown: dict[str, float] = field(default_factory=dict)  # block → WNET [kW]
+    hx_area_m2: float = 0.0                       # 自動冷却器の総伝熱面積 [m2]
+                                                  # （Lee Eq.5/6。2026-07-16 HX コスト組み込み）
 
     @classmethod
     def bad(cls) -> "Metrics":

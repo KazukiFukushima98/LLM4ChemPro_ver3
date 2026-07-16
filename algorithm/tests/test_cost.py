@@ -103,6 +103,47 @@ class TestCostPerTCO2(unittest.TestCase):
         self.assertAlmostEqual(cost_default - cost_free, 2.252, delta=0.005)
 
 
+class TestHxCost(unittest.TestCase):
+    """HX（自動冷却器）コストの組み込み（2026-07-16、Lee §2.3 / Eq.5-6・Eq.16 C_hx）。"""
+
+    def test_hx_area_hand_computed(self):
+        """A = |Q|/(U·LMTD)。Q=-1000kW, T_in=150°C → LMTD=(125-15)/ln(125/15)=51.88 K。"""
+        from simulator import hx_area_m2_from_duty
+        area = hx_area_m2_from_duty(-1000.0, 150.0)
+        self.assertAlmostEqual(area, 1_000_000.0 / (132.5 * 51.8803), delta=0.05)
+
+    def test_hx_area_equal_end_temps_uses_dt(self):
+        """両端温度差が等しい（T_in=40°C → dt1=dt2=15K）とき LMTD=15K。"""
+        from simulator import hx_area_m2_from_duty
+        area = hx_area_m2_from_duty(-100.0, 40.0)
+        self.assertAlmostEqual(area, 100_000.0 / (132.5 * 15.0), delta=0.01)
+
+    def test_hx_area_zero_when_not_cooling(self):
+        """加熱側 duty・ガス入口 35°C 以下・欠測は面積 0（ブロワー出口が冷たい場合等）。"""
+        from simulator import hx_area_m2_from_duty
+        self.assertEqual(hx_area_m2_from_duty(500.0, 150.0), 0.0)   # 加熱
+        self.assertEqual(hx_area_m2_from_duty(-500.0, 30.0), 0.0)   # 入口 35°C 以下
+        self.assertEqual(hx_area_m2_from_duty(None, 150.0), 0.0)    # duty 欠測
+        self.assertEqual(hx_area_m2_from_duty(-500.0, None), 0.0)   # 温度欠測
+
+    def test_cost_includes_hx_term(self):
+        """hx_area_m2 が CAPEX に C_hx=300 $/m2 で載る。
+        Δ = 0.2*1.6*300*10000 / (477.02*7446) ≈ 0.2703 $/t"""
+        base = Metrics(specific_energy=300.0, purity=0.96, recovery=0.90,
+                       energy_breakdown={"VP1": 50000.0})
+        with_hx = Metrics(specific_energy=300.0, purity=0.96, recovery=0.90,
+                          energy_breakdown={"VP1": 50000.0}, hx_area_m2=10000.0)
+        areas = {"MEMB1": 500000.0}
+        delta = cost_per_tco2(with_hx, areas, _case()) - cost_per_tco2(base, areas, _case())
+        self.assertAlmostEqual(delta, 0.2703, delta=0.001)
+
+    def test_hx_default_zero_backward_compatible(self):
+        """hx_area_m2 未指定（旧 Metrics 相当）ではコスト不変。"""
+        m = Metrics(specific_energy=300.0, purity=0.96, recovery=0.90,
+                    energy_breakdown={"VP1": 50000.0})
+        self.assertEqual(m.hx_area_m2, 0.0)
+
+
 class TestLeeReproduction(unittest.TestCase):
     """Lee et al. (2018) Fig.3/Fig.4 の4設計で論文記載の C_cap を再現できること。
 
