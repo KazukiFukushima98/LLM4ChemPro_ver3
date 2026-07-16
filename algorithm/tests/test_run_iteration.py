@@ -1,12 +1,14 @@
-"""get_next_iter_num の採番ロジックの単体テスト（Aspen 不要・決定的）。
+"""Unit tests for the numbering logic of get_next_iter_num (no Aspen, deterministic).
 
-iterations/ を tempfile で組み、iter_NNN の数値部分の max + 1 が返ることを検証する。
-削除後の非上書き（count+1 ではなく max+1）・欠番・異物 skip を重点的に確認する。
+Builds an iterations/ tree with tempfile and checks that the returned number is
+max + 1 over the numeric part of iter_NNN. The focus is on not reusing a number
+after a deletion (max+1, not count+1), on gaps, and on skipping foreign entries.
 
-import run_iteration は top-level で simulator(→pythoncom)・ga(→deap) を連鎖
-import するが、Aspen 自体は起動しないのでテストは Aspen 不要のまま。
+importing run_iteration transitively imports simulator (-> pythoncom) and ga
+(-> deap) at top level, but it never starts Aspen itself, so these tests remain
+Aspen-free.
 
-実行:
+Run:
     uv run python -m unittest algorithm.tests.test_run_iteration
 """
 
@@ -32,7 +34,7 @@ except ImportError:  # pragma: no cover
 
 
 def _mkdirs(base: str, names: list[str]) -> None:
-    """base/iterations/ を作り、names の各エントリをディレクトリとして作る。"""
+    """Create base/iterations/ and a directory for each entry in names."""
     iter_dir = os.path.join(base, "iterations")
     os.makedirs(iter_dir, exist_ok=True)
     for n in names:
@@ -40,12 +42,14 @@ def _mkdirs(base: str, names: list[str]) -> None:
 
 
 class TestBuildResultsGhostParams(unittest.TestCase):
-    """optimal_params から pruned ユニットの自由次元を除外する（幽霊シグナル防止）。
+    """Exclude the free dimensions of pruned units from optimal_params (prevents ghost signals).
 
-    x 整列修正により pruned 膜の変数は評価に影響しない自由次元となり、optimizer が
-    置いた任意の値（境界値になりやすい）をそのまま記録すると extract_bounds_hit が
-    「存在しない膜の張り付き」を報告して SST を誤誘導する。best トポロジーに存在する
-    変数だけが記録されることを検証する。
+    Since the x-alignment fix, the variables of a pruned membrane are free
+    dimensions that do not affect the evaluation. Recording whatever value the
+    optimizer happens to leave there (often a bound) would make
+    extract_bounds_hit report a "pinned bound on a membrane that does not exist"
+    and mislead the SST. This checks that only the variables present in the best
+    topology are recorded.
     """
 
     _METRICS = Metrics(specific_energy=300.0, purity=0.96, recovery=0.92,
@@ -53,13 +57,13 @@ class TestBuildResultsGhostParams(unittest.TestCase):
 
     def _build(self, q1: float, q2: float) -> dict:
         ss = make_bypass_toggle_ss()
-        # 染色体: [q_1, q_2 | MEMB1_area, MEMB1_p_perm, MEMB2_area, MEMB2_p_perm]
+        # chromosome: [q_1, q_2 | MEMB1_area, MEMB1_p_perm, MEMB2_area, MEMB2_p_perm]
         best = [q1, q2, 111000.0, 0.5, 222000.0, 0.4]
         detailed = DetailedResult(metrics=self._METRICS)
         return run_iteration.build_results_dict(1, best, ss, detailed, [], 0)
 
     def test_pruned_membrane_params_excluded(self) -> None:
-        """バイパス ON（MEMB2 pruned）→ MEMB2 の変数は記録されない。"""
+        """Bypass ON (MEMB2 pruned) -> the MEMB2 variables are not recorded."""
         results = self._build(q1=0.0, q2=1.0)
         params = results["optimal_params"]
         self.assertEqual(params["q_1"], 0)
@@ -70,7 +74,7 @@ class TestBuildResultsGhostParams(unittest.TestCase):
         self.assertNotIn("MEMB2_p_perm", params)
 
     def test_active_membrane_params_kept(self) -> None:
-        """給餌 ON（MEMB2 あり）→ 全変数が記録される。"""
+        """Feed ON (MEMB2 present) -> all variables are recorded."""
         results = self._build(q1=1.0, q2=0.0)
         params = results["optimal_params"]
         self.assertAlmostEqual(params["MEMB2_area"], 222000.0)
@@ -79,54 +83,54 @@ class TestBuildResultsGhostParams(unittest.TestCase):
 
 class TestGetNextIterNum(unittest.TestCase):
     def test_iterations_dir_absent(self) -> None:
-        """iterations/ が無ければ 1 を返し、ディレクトリを作成する。"""
+        """If iterations/ does not exist, return 1 and create the directory."""
         with tempfile.TemporaryDirectory() as base:
             self.assertFalse(os.path.isdir(os.path.join(base, "iterations")))
             self.assertEqual(run_iteration.get_next_iter_num(base), 1)
             self.assertTrue(os.path.isdir(os.path.join(base, "iterations")))
 
     def test_empty(self) -> None:
-        """iterations/ が空なら 1。"""
+        """An empty iterations/ gives 1."""
         with tempfile.TemporaryDirectory() as base:
             _mkdirs(base, [])
             self.assertEqual(run_iteration.get_next_iter_num(base), 1)
 
     def test_consecutive(self) -> None:
-        """iter_001, iter_002 → 3。"""
+        """iter_001, iter_002 -> 3."""
         with tempfile.TemporaryDirectory() as base:
             _mkdirs(base, ["iter_001", "iter_002"])
             self.assertEqual(run_iteration.get_next_iter_num(base), 3)
 
     def test_single(self) -> None:
-        """iter_001 のみ → 2。"""
+        """iter_001 only -> 2."""
         with tempfile.TemporaryDirectory() as base:
             _mkdirs(base, ["iter_001"])
             self.assertEqual(run_iteration.get_next_iter_num(base), 2)
 
     def test_no_overwrite_after_delete(self) -> None:
-        """iter_002 のみ（iter_001 削除後）→ 3（count+1 の 2 ではない）。"""
+        """iter_002 only (after iter_001 was deleted) -> 3 (not 2, which count+1 would give)."""
         with tempfile.TemporaryDirectory() as base:
             _mkdirs(base, ["iter_002"])
             self.assertEqual(run_iteration.get_next_iter_num(base), 3)
 
     def test_gap(self) -> None:
-        """iter_001, iter_003（欠番）→ 4。"""
+        """iter_001, iter_003 (a gap) -> 4."""
         with tempfile.TemporaryDirectory() as base:
             _mkdirs(base, ["iter_001", "iter_003"])
             self.assertEqual(run_iteration.get_next_iter_num(base), 4)
 
     def test_ignore_non_numeric_and_non_dir(self) -> None:
-        """異物（非数字・非ディレクトリ）は skip。iter_001, iter_002 が効いて 3。"""
+        """Foreign entries (non-numeric, non-directory) are skipped; iter_001 and iter_002 count, giving 3."""
         with tempfile.TemporaryDirectory() as base:
             _mkdirs(base, ["iter_001", "iter_002", "iter_foo", "notiter", "iter_"])
-            # iter_005_log.txt はファイル（非ディレクトリ異物）として作る
+            # create iter_005_log.txt as a file (a non-directory foreign entry)
             with open(os.path.join(base, "iterations", "iter_005_log.txt"), "w") as f:
                 f.write("log\n")
             self.assertEqual(run_iteration.get_next_iter_num(base), 3)
 
 
 class TestApplyGaOverrides(unittest.TestCase):
-    """CLI 由来の pop/gen 上書きが case.yaml を汚さず in-memory のみで効くこと。"""
+    """The pop/gen overrides from the CLI take effect in memory only, without dirtying case.yaml."""
 
     def test_overrides_applied_in_memory_only(self) -> None:
         case = run_iteration.load_case()
@@ -136,12 +140,12 @@ class TestApplyGaOverrides(unittest.TestCase):
 
         out = run_iteration.apply_ga_overrides(case, 4, 3)
 
-        # 上書き結果が返る
+        # the overridden result is returned
         self.assertEqual(out["ga"]["pop_size"], 4)
         self.assertEqual(out["ga"]["n_gen"], 3)
-        # 入力 dict は不変（純関数・コピーを返す）
+        # the input dict is untouched (pure function, returns a copy)
         self.assertEqual(case, snap)
-        # ディスク上の case.yaml は無変更
+        # case.yaml on disk is unchanged
         with open(run_iteration.CASE_PATH, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), disk_before)
 
@@ -149,7 +153,7 @@ class TestApplyGaOverrides(unittest.TestCase):
         case = {"ga": {"pop_size": 20, "n_gen": 50}}
         out = run_iteration.apply_ga_overrides(case, 4, None)
         self.assertEqual(out["ga"]["pop_size"], 4)
-        self.assertEqual(out["ga"]["n_gen"], 50)  # gen は未指定なので据え置き
+        self.assertEqual(out["ga"]["n_gen"], 50)  # gen was not given, so it is left as is
 
     def test_none_passthrough_no_change(self) -> None:
         case = {"ga": {"pop_size": 20, "n_gen": 50}}
@@ -158,10 +162,10 @@ class TestApplyGaOverrides(unittest.TestCase):
 
 
 class TestDetailedEvalRetry(unittest.TestCase):
-    """詳細評価の transient wedge リトライ（run22 で実測した故障モードの回帰テスト）。"""
+    """Retry on a transient wedge in the detailed evaluation (a regression test for the failure mode measured in run22)."""
 
     class _FlakyEvaluator:
-        """最初の fail_n 回は bad、その後は実値を返すモック。"""
+        """Mock that returns bad for the first fail_n calls and real values afterwards."""
 
         def __init__(self, fail_n: int) -> None:
             from evaluator import DetailedResult, Metrics
@@ -184,7 +188,7 @@ class TestDetailedEvalRetry(unittest.TestCase):
         self.assertAlmostEqual(d.metrics.specific_energy, 999.0)
 
     def test_transient_wedge_recovers_on_retry(self) -> None:
-        """run22 の実測パターン：1回目 wedge → リトライで実値回復。"""
+        """The pattern measured in run22: a wedge on the first call, real values recovered on retry."""
         ev = self._FlakyEvaluator(fail_n=1)
         d = run_iteration.evaluate_detailed_with_retry(ev, {}, [0.0])
         self.assertEqual(ev.calls, 2)
@@ -192,19 +196,20 @@ class TestDetailedEvalRetry(unittest.TestCase):
         self.assertIn("V0", d.stream_results)
 
     def test_persistent_failure_returns_bad_after_budget(self) -> None:
-        """全滅でも例外にせず bad を返す（呼び出し側の既存経路を維持）。"""
+        """Even if every attempt fails, return bad rather than raising (keeping the caller's existing path)."""
         from evaluator import BAD_VALUE
         ev = self._FlakyEvaluator(fail_n=10)
         d = run_iteration.evaluate_detailed_with_retry(ev, {}, [0.0], retries=2)
-        self.assertEqual(ev.calls, 3)  # 初回 + リトライ2回で打ち切り
+        self.assertEqual(ev.calls, 3)  # give up after the first call plus 2 retries
         self.assertGreaterEqual(d.metrics.specific_energy, BAD_VALUE)
 
 
 class TestCliCommitWiring(unittest.TestCase):
-    """--no-commit / --pop / --gen が run_one_iteration へ正しく配線されること（Aspen 不要）。
+    """--no-commit / --pop / --gen are wired through to run_one_iteration correctly (no Aspen).
 
-    run_one_iteration をモックに差し替えて main() のCLI配線だけを検証する。
-    モックは GA も auto-commit も呼ばないので git サブプロセスは起動されない。
+    run_one_iteration is replaced with a mock so that only the CLI wiring of
+    main() is exercised. The mock invokes neither the GA nor the auto-commit, so
+    no git subprocess is started.
     """
 
     def _run_main(self, argv: list[str]) -> dict:
@@ -231,13 +236,13 @@ class TestCliCommitWiring(unittest.TestCase):
         cap = self._run_main(
             ["run_iteration.py", "--base-dir", "X", "--no-commit", "--pop", "4", "--gen", "3"]
         )
-        self.assertFalse(cap["commit"])  # --no-commit → commit=False（auto-commit 不発）
+        self.assertFalse(cap["commit"])  # --no-commit -> commit=False (auto-commit does not fire)
         self.assertEqual(cap["pop"], 4)
         self.assertEqual(cap["gen"], 3)
 
     def test_default_commits(self) -> None:
         cap = self._run_main(["run_iteration.py", "--base-dir", "X"])
-        self.assertTrue(cap["commit"])  # 既定は commit=True
+        self.assertTrue(cap["commit"])  # the default is commit=True
 
 
 if __name__ == "__main__":

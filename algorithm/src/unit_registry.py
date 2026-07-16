@@ -1,13 +1,14 @@
-"""ユニット種別 → GA変数定義・境界・構造テンプレートの登録簿。
+"""Registry mapping unit types to GA variable definitions, bounds and structure templates.
 
-責務:
-- ユニット種別ごとの連続変数（GA で動かすパラメータ）と既定境界
-- ユニット種別ごとの構造テンプレート（出力ポート名の集合）
-- bounds_override が unit データ側にあれば既定より優先する
-- Robeson 膜モデル（ver3 12.1）: permeance_CO2 を GA 変数化し、選択率を
-  Robeson 2008 CO2/N2 上界（0.1 µm 膜厚換算）から導出する相関式
+Responsibilities:
+- Continuous variables (parameters the GA moves) and default bounds per unit type
+- Structure template per unit type (the set of outlet port names)
+- bounds_override on the unit data takes precedence over the defaults
+- Robeson membrane model (ver3 12.1): permeance_CO2 becomes a GA variable and the
+  selectivity is derived from the Robeson 2008 CO2/N2 upper bound (referred to a
+  0.1 um membrane thickness)
 
-依存: なし（Aspen 非依存・ドメイン非依存ロジック）
+Dependencies: none (Aspen-independent, domain-independent logic)
 """
 
 from __future__ import annotations
@@ -15,53 +16,56 @@ from __future__ import annotations
 from typing import Any
 
 # =========================================================
-# Robeson 膜モデル（ver3 12.1）
+# Robeson membrane model (ver3 12.1)
 # =========================================================
 #
-# 単位換算: Aspen GasPermModule の permeance 単位は m3(STP)/(m2·h·bar)。
-# 1 GPU = 1e-6 cm3(STP)/(cm2·s·cmHg) ≈ 2.70677e-3 m3(STP)/(m2·h·bar)。
-# 換算係数はプロジェクト従来の膜パラメータ（permeance_CO2=2.70677 が
-# MTR Polaris 第1世代の 1000 GPU、permeance_N2 がその 1/50=α50）と正確に
-# 整合するよう固定する（物理定数からの導出値 2.70022e-3 との差 0.24% は
-# cmHg 換算の丸めで、既存資産との連続性を優先）。
+# Unit conversion: the permeance unit of the Aspen GasPermModule is m3(STP)/(m2.h.bar).
+# 1 GPU = 1e-6 cm3(STP)/(cm2.s.cmHg) ~= 2.70677e-3 m3(STP)/(m2.h.bar).
+# The conversion factor is pinned so that it agrees exactly with the membrane
+# parameters used so far in this project (permeance_CO2=2.70677 being the 1000 GPU
+# of the first-generation MTR Polaris, and permeance_N2 being 1/50 of it = alpha 50).
+# The 0.24% gap against the value derived from physical constants (2.70022e-3) comes
+# from rounding in the cmHg conversion; continuity with the existing assets wins.
 GPU_TO_ASPEN = 2.70677e-3
 
-# Robeson 2008 CO2/N2 上界（Lee et al. 2018, Eq. 21）の既定値:
-#   permeance_CO2 [GPU] = k · α^(−n)  （膜厚 0.1 µm 換算）
-#   ⇔ α = (k / Q[GPU])^(1/n)
-# case.yaml の membrane_model: で上書き可能（人間管理）。
+# Defaults for the Robeson 2008 CO2/N2 upper bound (Lee et al. 2018, Eq. 21):
+#   permeance_CO2 [GPU] = k * alpha^(-n)  (referred to 0.1 um thickness)
+#   <=> alpha = (k / Q[GPU])^(1/n)
+# Overridable from membrane_model: in case.yaml (human-managed).
 _ROBESON_DEFAULTS: dict[str, Any] = {
     "robeson_k_gpu": 3.0967e8,
     "robeson_n": 2.888,
     "gpu_to_aspen": GPU_TO_ASPEN,
-    # 探索範囲 [GPU]。Lee の感度範囲 500-5000 と段別最適 5986 をカバー
+    # Search range [GPU]. Covers Lee's sensitivity range 500-5000 and the
+    # per-stage optimum 5986
     "permeance_bounds_gpu": [500.0, 6000.0],
-    "tie": True,   # 全段同一膜（1変数共有）。False で段別独立
+    "tie": True,   # same membrane for every stage (one shared variable). False = independent per stage
 }
 
 
 def _mm_cfg(membrane_model: dict[str, Any] | None) -> dict[str, Any]:
-    """membrane_model 設定に既定値をマージして返す。"""
+    """Merge the membrane_model settings onto the defaults and return them."""
     return {**_ROBESON_DEFAULTS, **(membrane_model or {})}
 
 
 def robeson_alpha(permeance_co2_aspen: float, membrane_model: dict[str, Any] | None = None) -> float:
-    """CO2 permeance（Aspen 単位）から Robeson 上界上の CO2/N2 選択率 α を返す。
+    """Return the CO2/N2 selectivity alpha on the Robeson upper bound for a CO2 permeance (Aspen units).
 
-    α = (k / Q[GPU])^(1/n)。上界そのものをフロンティアとして使う（Lee 2018 と
-    同一のアンカー。現行膜 Polaris 1000GPU/α50 は上界より下にあり、上界上の
-    α(1000GPU)≈80）。permeance_N2 = permeance_CO2 / α で導出する。
+    alpha = (k / Q[GPU])^(1/n). The upper bound itself is used as the frontier (the
+    same anchor as Lee 2018; today's Polaris membrane at 1000 GPU / alpha 50 sits
+    below the bound, where alpha(1000 GPU) ~= 80). permeance_N2 is then derived as
+    permeance_CO2 / alpha.
     """
     cfg = _mm_cfg(membrane_model)
     q_gpu = float(permeance_co2_aspen) / float(cfg["gpu_to_aspen"])
     if q_gpu <= 0.0:
         raise ValueError(f"permeance_CO2 must be positive, got {permeance_co2_aspen!r}")
     alpha = (float(cfg["robeson_k_gpu"]) / q_gpu) ** (1.0 / float(cfg["robeson_n"]))
-    return max(alpha, 1.0)  # 防御: 範囲外でも α<1（逆選択）にはしない
+    return max(alpha, 1.0)  # guard: never allow alpha<1 (reverse selectivity), even out of range
 
 
 def permeance_bounds_aspen(membrane_model: dict[str, Any] | None = None) -> list[float]:
-    """permeance_CO2 変数の bounds を Aspen 単位で返す（GPU 指定を換算）。"""
+    """Return the bounds of the permeance_CO2 variable in Aspen units (converting the GPU spec)."""
     cfg = _mm_cfg(membrane_model)
     lo_gpu, hi_gpu = cfg["permeance_bounds_gpu"]
     c = float(cfg["gpu_to_aspen"])
@@ -69,22 +73,25 @@ def permeance_bounds_aspen(membrane_model: dict[str, Any] | None = None) -> list
 
 
 def is_tie_mode(membrane_model: dict[str, Any] | None) -> bool:
-    """tie モード（全段同一膜＝permeance 1変数共有）かどうか。"""
+    """Whether tie mode is on (same membrane for every stage = one shared permeance variable)."""
     return bool(_mm_cfg(membrane_model).get("tie", True))
 
 
-# 連続変数の既定境界（ユニット種別ごと）
-# ver3（12.3）: 先行研究 Lee et al., J. Membr. Sci. 563 (2018) 820-834 の §2.6 に整合。
-#   - area: 段あたり [1e5, 1.5e6] m²（feed も Lee の 500 Nm³/s 相当へスケールアップ済み。
-#     case.yaml feed.totflow 参照。コストモデルが線形なので $/tCO2 はスケール不変）
-#   - p_permeate: 真空ポンプ吸引圧 0.1-1 bar（0.01 bar=10 mbar は工業的に非現実的。
-#     上限は駆動力ゼロを避けて 0.99）
-#   - COMP.outlet_pressure: ブロワー campaign（run26〜、2026-07-15 ユーザ決定）では
-#     [1.1, 1.1]＝固定（lo==hi は make_ga_variables が GA/BO 変数から除外する）。
-#     全膜入口を 1.1 bar に統一する Merkel/MTR 型シナリオの強制で、エージェントが
-#     後から追加する COMP も変数なしのブロワーになる。params に 1.1 以外を書く
-#     すり抜けは apply_ss の固定パラメータガードが拒否する。
-#     Lee 整合の昇圧可変 campaign（run25）の値 [1.0, 4.0] は f2424a1 参照。
+# Default bounds of the continuous variables (per unit type)
+# ver3 (12.3): consistent with S2.6 of the prior work Lee et al., J. Membr. Sci. 563 (2018) 820-834.
+#   - area: [1e5, 1.5e6] m^2 per stage (the feed is also scaled up to Lee's 500 Nm^3/s
+#     equivalent; see feed.totflow in case.yaml. The cost model is linear, so $/tCO2 is
+#     scale-invariant)
+#   - p_permeate: vacuum pump suction pressure 0.1-1 bar (0.01 bar = 10 mbar is
+#     industrially unrealistic. The upper limit is 0.99 to avoid zero driving force)
+#   - COMP.outlet_pressure: in the blower campaign (run26 onward, user decision
+#     2026-07-15) this is [1.1, 1.1] = fixed (make_ga_variables drops lo==hi from the
+#     GA/BO variables). It enforces the Merkel/MTR-type scenario in which every membrane
+#     inlet is unified at 1.1 bar, so any COMP the agent adds later is also a blower with
+#     no variable. Writing anything other than 1.1 into params is rejected by the
+#     fixed-parameter guard in apply_ss.
+#     For the Lee-consistent variable-compression campaign (run25) the value was
+#     [1.0, 4.0]; see f2424a1.
 UNIT_BOUNDS: dict[str, dict[str, list[float]]] = {
     "MEMB": {
         "area":       [100000.0, 1500000.0],
@@ -93,17 +100,20 @@ UNIT_BOUNDS: dict[str, dict[str, list[float]]] = {
     "COMP": {
         "outlet_pressure": [1.1, 1.1],
     },
-    # 膨張機（ver3 12.4）: GA 変数なし（出口圧は params.outlet_pressure 固定・既定 1 bar）。
-    # 構造部品としてエージェントが高圧経路（昇圧後の残渣等）に配置し電力を回収する。
+    # Expander (ver3 12.4): no GA variable (the outlet pressure is fixed by
+    # params.outlet_pressure, default 1 bar). The agent places it as a structural part on a
+    # high-pressure path (e.g. retentate after compression) to recover power.
     "EXP": {},
-    # 冷却器/加熱器（ver3 12.4 検算で追加）: GA 変数なし（params.temperature [°C]・
-    # params.pressure は Aspen Heater の PRES 指定＝0 で圧力損失なし）。builder の
-    # _create_heater（ver1 由来・動作資産）を使う。圧縮後の高温ガスを膜運転温度へ
-    # 戻す中間冷却器として配置する（冷却水コストはモデル外＝HX 省略の決定と整合）。
+    # Cooler/heater (added during the ver3 12.4 cross-check): no GA variable
+    # (params.temperature [degC]; params.pressure is the PRES spec of the Aspen Heater,
+    # 0 meaning no pressure drop). Uses the builder's _create_heater (inherited from ver1,
+    # a proven asset). Placed as an intercooler that brings hot compressed gas back to the
+    # membrane operating temperature (cooling-water cost is outside the model, consistent
+    # with the decision to omit HX).
     "HEAT": {},
 }
 
-# 連続変数の宣言（GA 変数名の組み立てに使う）
+# Declaration of the continuous variables (used to assemble the GA variable names)
 _UNIT_GA_VARS: dict[str, list[dict[str, str]]] = {
     "MEMB": [
         {"suffix": "area",   "param": "area"},
@@ -116,8 +126,9 @@ _UNIT_GA_VARS: dict[str, list[dict[str, str]]] = {
     "HEAT": [],
 }
 
-# 構造テンプレート（add_unit が出力頂点を生成するときに参照）
-# outlets はポート名のリスト。順序は決定論的（apply_ss が new vertex を順に採番する）
+# Structure templates (consulted when add_unit creates the outlet vertices)
+# outlets is a list of port names. The order is deterministic (apply_ss numbers the new
+# vertices in this order)
 STRUCTURE_TEMPLATES: dict[str, dict[str, list[str]]] = {
     "MEMB": {"outlets": ["permeate", "retentate"]},
     "COMP": {"outlets": ["outlet"]},
@@ -127,9 +138,9 @@ STRUCTURE_TEMPLATES: dict[str, dict[str, list[str]]] = {
 
 
 def get_unit_type(unit_name: str) -> str | None:
-    """ユニット名から種別プレフィクスを取り出す（"MEMB1" -> "MEMB"）。
+    """Extract the type prefix from a unit name ("MEMB1" -> "MEMB").
 
-    UNIT_BOUNDS に登録のないプレフィクスは None を返す。
+    Returns None for a prefix that is not registered in UNIT_BOUNDS.
     """
     for prefix in UNIT_BOUNDS:
         if unit_name.startswith(prefix):
@@ -142,26 +153,28 @@ def make_ga_variables(
     unit_data: dict[str, Any] | None = None,
     membrane_model: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """ユニット1つに対応する連続 GA 変数のリストを返す。
+    """Return the list of continuous GA variables belonging to a single unit.
 
     Parameters
     ----------
     unit_name : str
-        ユニット名（例 "MEMB1"）。種別はプレフィクスで識別する。
+        Unit name (e.g. "MEMB1"). The type is identified by the prefix.
     unit_data : dict | None
-        SS の units[name] エントリ。`bounds_override: {param_name: [lo, hi]}` を
-        持っていれば、その param について UNIT_BOUNDS の既定より優先する。
+        The units[name] entry of the SS. If it carries
+        `bounds_override: {param_name: [lo, hi]}`, that takes precedence over the
+        UNIT_BOUNDS default for the given param.
     membrane_model : dict | None
-        case.yaml の membrane_model: セクション（12.1）。与えられ、かつ tie=False
-        （段別独立膜）のとき、MEMB に permeance_CO2 変数 `{unit}_perm` を追加する。
-        tie=True（全段同一膜）の共有変数は topology.continuous_variables 側で
-        先頭に 1 本だけ付与する（ここでは付けない）。None なら従来どおり
-        （permeance は params の固定値）。
+        The membrane_model: section of case.yaml (12.1). When given with tie=False
+        (independent membrane per stage), a permeance_CO2 variable `{unit}_perm` is
+        added to each MEMB. Under tie=True (same membrane for every stage) the shared
+        variable is added once at the front by topology.continuous_variables instead
+        (not here). None keeps the previous behaviour (permeance is a fixed value in
+        params).
 
     Returns
     -------
     list[dict]
-        各要素は {"name": str, "unit_param": [unit_name, param], "bounds": [lo, hi]}。
+        Each element is {"name": str, "unit_param": [unit_name, param], "bounds": [lo, hi]}.
     """
     unit_type = get_unit_type(unit_name)
     if unit_type is None:
@@ -174,10 +187,11 @@ def make_ga_variables(
         param = spec["param"]
         bounds = overrides.get(param, UNIT_BOUNDS[unit_type][param])
         if bounds[0] == bounds[1]:
-            # 固定パラメータ（2026-07-15）: bounds_override を lo==hi にすると
-            # GA/BO 変数から除外される（値は units[name].params の固定値が担う。
-            # seed 側で params にも同じ値を書くこと）。ゼロ幅次元を BO の正規化に
-            # 渡さないための正攻法。run26 の「feed 昇圧なし＝pout 1.1 bar 固定」で使用。
+            # Fixed parameter (2026-07-15): setting a bounds_override to lo==hi drops it
+            # from the GA/BO variables (the value is then carried by the fixed value in
+            # units[name].params, so the seed must write the same value into params too).
+            # This is the clean way to keep a zero-width dimension out of BO's
+            # normalisation. Used by run26 for "no feed compression = pout fixed at 1.1 bar".
             continue
         variables.append({
             "name":       f"{unit_name}_{spec['suffix']}",
@@ -196,7 +210,7 @@ def make_ga_variables(
 
 
 def get_outlet_ports(unit_type: str) -> list[str]:
-    """ユニット種別の出力ポート名リストを返す（STRUCTURE_TEMPLATES より）。"""
+    """Return the list of outlet port names for a unit type (from STRUCTURE_TEMPLATES)."""
     template = STRUCTURE_TEMPLATES.get(unit_type)
     if template is None:
         raise KeyError(f"unknown unit_type: {unit_type!r}")

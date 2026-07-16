@@ -4,80 +4,104 @@
 
 feed:
   flowbase: MASS          # feed basis. Applied post-build (overrides builder defaults).
-                          # ★注意: この書き込みは実機で無効で、TOTFLOW は**モル流量
-                          # [kmol/h]** として効く（2026-07-10 smoke_feed 実測:
-                          # totflow=2.44e6 で V0 全モル流量=2.44e6 kmol/h。ver2 の
-                          # run12 記録とも整合＝ver2 時代から同挙動）。動作実績のある
-                          # 書き込み列は変えず、値をモル流量として与える。
-  totflow: 80307.0        # kmol/h. Lee et al. (2018) の 600MWe 石炭火力排ガス
-                          # 500 Nm³/s = 22,307.5 mol/s 相当。膜面積 bounds（Lee の
-                          # 値のまま）と整合するスケール（2026-07-10 ユーザ決定）。
-  co2_frac: 0.13          # post-combustion（石炭火力排ガス）。Lee et al. (2018) の feed 組成
-                          # （文献[3] の 13 mol%）に整合（2026-07-16 ユーザ決定。旧値 0.15 は
-                          # run24〜26 で使用）。DAC なら ~0.00042 (420 ppm)。
+                          # *** NOTE: this write has no effect on the real system; TOTFLOW acts
+                          # as a **molar flow rate [kmol/h]** (measured with smoke_feed on
+                          # 2026-07-10: totflow=2.44e6 gives a total molar flow of 2.44e6 kmol/h
+                          # at V0. This also matches the run12 record of ver2, i.e. the behaviour
+                          # has been the same since ver2). The write sequence is a proven asset,
+                          # so it is left untouched and the value is supplied as a molar flow.
+  totflow: 80307.0        # kmol/h. Equivalent to the 500 Nm3/s = 22,307.5 mol/s flue gas of the
+                          # 600 MWe coal-fired power plant in Lee et al. (2018). This scale is
+                          # consistent with the membrane area bounds (kept at Lee's values)
+                          # (user decision 2026-07-10).
+  co2_frac: 0.13          # post-combustion (coal-fired flue gas). Consistent with the feed
+                          # composition of Lee et al. (2018) (13 mol% from their ref. [3])
+                          # (user decision 2026-07-16; the former value 0.15 was used in
+                          # run24-26). For DAC this would be ~0.00042 (420 ppm).
   temp: 25.0              # °C. Feed temperature.
   pressure: 1.0           # bar. Feed pressure.
-  basis: MOLE-FRAC        # composition basis. FLOWBASE=MASS かつ BASIS=MOLE-FRAC の組み合わせ
-                          # が旧コードで動作実績あり（_configure_feed + evaluate_group の合成結果）。
+  basis: MOLE-FRAC        # composition basis. The combination FLOWBASE=MASS with BASIS=MOLE-FRAC
+                          # is a proven asset from the old code (the combined effect of
+                          # _configure_feed and evaluate_group).
 
 optimization_targets:
-  purity_min: 0.95        # CO2 product purity lower bound（CO2輸送規格相当。
-                          # 2026-07-07 に 0.90→0.95 へ引き上げ：1段の理論上限（α=50, feed15% で
-                          # y≈89.8%）を超えるため2段濃縮が必須になり、多段化圧力をかける）
-  recovery_min: 0.90      # CO2 recovery lower bound（DOE 回収目標相当。0.70→0.90 へ引き上げ：
-                          # 残渣 CO2 の回収が必須になり「巨大リサイクル vs 残渣側回収段」の
-                          # 構造競争を誘発する＝3段が出得る系にする）
-  objective: minimize_cost  # ver3 12.2: 年間換算回収コスト [$/tCO2] を最小化（economics: 参照）。
-                            # `minimize_specific_energy` に戻すと ver2 のエネルギー目的。
-                            # results.json にはどちらでも energy / cost の両方が記録される。
+  purity_min: 0.95        # CO2 product purity lower bound (equivalent to the CO2 transport spec).
+                          # Raised from 0.90 to 0.95 on 2026-07-07: it exceeds the theoretical
+                          # limit of a single stage (y~=89.8% at alpha=50 and 15% feed), so a
+                          # two-stage enrichment becomes mandatory and pressure toward more
+                          # stages is applied.
+  recovery_min: 0.90      # CO2 recovery lower bound (equivalent to the DOE recovery target).
+                          # Raised from 0.70 to 0.90: recovering the CO2 in the retentate becomes
+                          # mandatory, which triggers a structural competition between a large
+                          # recycle and a retentate-side recovery stage, i.e. a system in which
+                          # three stages can emerge.
+  objective: minimize_cost  # ver3 12.2: minimise the annualised capture cost [$/tCO2] (see
+                            # economics:). Switching back to `minimize_specific_energy` restores
+                            # the ver2 energy objective. Either way, results.json records both
+                            # energy and cost.
 
 penalty_weight: 100000.0  # PENALTY_W. Quadratic penalty on purity/recovery shortfall.
-                          # 1.0e5 は PyYAML（YAML 1.1）で string になる（指数符号が必須）ため整数表記。
-                          # CBO では獲得関数に使わずロギング fitness のみに影響。
-                          # 注: objective=minimize_cost では economics.penalty_weight（コスト
-                          # スケールの λ、Lee の r=1000）が代わりに使われる。
+                          # Written as an integer-style literal because 1.0e5 would be parsed as
+                          # a string by PyYAML (YAML 1.1 requires an explicit exponent sign).
+                          # Under CBO it is not used by the acquisition function and only affects
+                          # the logged fitness.
+                          # Note: with objective=minimize_cost, economics.penalty_weight (the
+                          # cost-scale lambda, Lee's r=1000) is used instead.
 
-# ver3 12.2: 経済定数（Lee et al. 2018 Table 1。人間管理）。
-# F_obj = (capital_charge · installation_factor · C_TCC) / (M_CO2 · t_op) + E·Ce + penalty
-# 熱交換器コスト（Chx）は 2026-07-16 に組み込み（Lee §2.3: U=132.5 W/m2K・冷却水 20→25°C・
-# 向流 LMTD・ガス出口 35°C。面積は simulator が自動冷却器 HXV/HXC の duty から算出）。
-# run24〜26 は HX なしの旧目的関数で最適化された値である点に注意。
-# 圧力機器の CAPEX は C_unit × |WNET|（電気動力そのまま・η で割らない）。Lee Fig.3/4 の
-# 4設計の再現計算で論文 C_cap と −2% 前後（≒HX 省略分）の一致を確認済み（2026-07-10。
-# Eq.16 の「/η」は等エントロピー仕事→実動力の換算で、Aspen WNET は既に実動力）。
+# ver3 12.2: economic constants (Lee et al. 2018, Table 1; human-managed).
+# F_obj = (capital_charge * installation_factor * C_TCC) / (M_CO2 * t_op) + E*Ce + penalty
+# The heat-exchanger cost (Chx) was incorporated on 2026-07-16 (Lee S2.3: U=132.5 W/m2K,
+# cooling water 20->25 degC, counter-current LMTD, gas outlet 35 degC. The area is computed by
+# the simulator from the duty of the automatic coolers HXV/HXC).
+# Note that run24-26 were optimised with the old objective function, which had no HX.
+# The CAPEX of the pressure equipment is C_unit * |WNET| (the electrical power as-is, NOT divided
+# by eta). Reproducing the four designs of Lee Fig.3/4 agrees with the paper's C_cap to within
+# about -2% (~= the omitted HX contribution), confirmed 2026-07-10. The "/eta" in their Eq.16
+# converts isentropic work into actual power, and the Aspen WNET is already the actual power.
 economics:
-  membrane_cost: 50.0             # $/m2（モジュール・スキッド込み）
+  membrane_cost: 50.0             # $/m2 (including module and skid)
   compressor_cost: 670.0          # $/kW
-  vacuum_pump_cost: 1341.0        # $/kW（auto-VP に適用）
-  expander_cost: 500.0            # $/kW（12.4 の膨張機実装後に効く。WNET<0 で判別）
-  hx_cost: 300.0                  # $/m2（冷却器。Lee Eq.16 C_hx。2026-07-16 組み込み）
+  vacuum_pump_cost: 1341.0        # $/kW (applied to auto-VP)
+  expander_cost: 500.0            # $/kW (takes effect once the expander of 12.4 is implemented;
+                                  # identified by WNET<0)
+  hx_cost: 300.0                  # $/m2 (cooler. Lee Eq.16 C_hx. Incorporated 2026-07-16)
   installation_factor: 1.6        # f_in
-  capital_charge_rate: 0.2        # /y（年間資本賦課率 20%）
+  capital_charge_rate: 0.2        # /y (annual capital charge rate of 20%)
   electricity_cost: 0.04          # $/kWh
-  operating_hours: 7446.0         # h/y（稼働率 85%）
-  penalty_weight: 1000.0          # コスト目的の shortfall² 係数（Lee の r）
+  operating_hours: 7446.0         # h/y (85% availability)
+  penalty_weight: 1000.0          # coefficient of the shortfall^2 term for the cost objective
+                                  # (Lee's r)
 
 vp_outlet_pressure: 1.0   # bar. Auto-VP discharge pressure on each membrane permeate (fixed).
 
-# ver3 12.1: Robeson 膜モデル。膜物性（permeance_CO2）を段別固定値から GA/BO の
-# 連続変数に格上げし、選択率は Robeson 2008 CO2/N2 上界（0.1µm 膜厚換算、
-# Lee et al. 2018 Eq.21: Q[GPU] = k·α^(−n)）で導出する。
-# このセクションを削除すると従来どおり（permeance は units.params の固定値）。
+# ver3 12.1: Robeson membrane model. The membrane property (permeance_CO2) is promoted from a
+# fixed per-stage value to a continuous GA/BO variable, and the selectivity is derived from the
+# Robeson 2008 CO2/N2 upper bound (referred to a 0.1 um thickness, Lee et al. 2018 Eq.21:
+# Q[GPU] = k * alpha^(-n)).
+# Deleting this section restores the previous behaviour (permeance is a fixed value in
+# units.params).
 membrane_model:
-  tie: false                       # 段別独立膜（MEMB ごとに permeance 変数 {unit}_perm を持つ。
-                                   # 2026-07-10 ユーザ決定：変数上限をバイナリのみに変えたため
-                                   # 連続変数の増加は許容）。true で全段同一膜（共有1変数）に
-                                   # 戻る。tie ⇄ 段別の比較自体が 12.1 の ablation。
-  robeson_n: 2.888                 # 上界の傾き（Robeson 2008 CO2/N2）
-  robeson_k_gpu: 3.0967e+8         # 上界の前係数 [GPU]（膜厚 0.1µm 換算）
-  gpu_to_aspen: 2.70677e-3         # 1 GPU → Aspen 単位 [m3(STP)/(m2·h·bar)]。
-                                   # 現行膜 permeance_CO2=2.70677 ≡ 1000 GPU（Polaris 第1世代）
-  permeance_bounds_gpu: [500.0, 6000.0]   # 探索範囲 [GPU]。Lee の感度範囲 500-5000 ＋
-                                          # 段別最適 5986 GPU をカバー（α は 43〜101 に対応）
+  tie: false                       # independent membrane per stage (each MEMB carries its own
+                                   # permeance variable {unit}_perm). User decision 2026-07-10:
+                                   # since the variable cap now counts binaries only, growth in
+                                   # the number of continuous variables is acceptable. Set to true
+                                   # to go back to the same membrane for every stage (one shared
+                                   # variable). The tie vs. per-stage comparison is itself the
+                                   # ablation of 12.1.
+  robeson_n: 2.888                 # slope of the upper bound (Robeson 2008 CO2/N2)
+  robeson_k_gpu: 3.0967e+8         # prefactor of the upper bound [GPU] (referred to 0.1 um)
+  gpu_to_aspen: 2.70677e-3         # 1 GPU -> Aspen units [m3(STP)/(m2*h*bar)].
+                                   # The current membrane permeance_CO2=2.70677 is identical to
+                                   # 1000 GPU (first-generation Polaris)
+  permeance_bounds_gpu: [500.0, 6000.0]   # search range [GPU]. Covers Lee's sensitivity range
+                                          # 500-5000 plus the per-stage optimum of 5986 GPU
+                                          # (alpha then ranges over 43-101)
 
-# Aspen タイムアウト。整数 [秒]。
-# evaluate_topology は GA ループで多数回回るので短め、evaluate_detailed は best 1点だけなので緩め。
-# 段数を増やす遷移で詰まり始めたら個別に伸ばす（COORDINATION フェーズ4(2) 対応）。
+# Aspen timeouts. Integers [seconds].
+# evaluate_topology runs many times inside the GA loop, so it is kept short; evaluate_detailed
+# runs for a single best point only, so it is more generous.
+# If transitions that add stages start to stall, extend them individually (this addresses
+# COORDINATION phase 4(2)).
 aspen_timeout_eval:   60
 aspen_timeout_detail: 120
 
@@ -85,24 +109,34 @@ ga:
   pop_size: 20
   n_gen: 50
 
-optimizer: bo        # SST ループを BO で回す。GA に戻すときはこの行を削除 or `ga` に書き換え。
+optimizer: bo        # drive the SST loop with BO. To go back to the GA, delete this line or set
+                     # it to `ga`.
 
 bo:
-  n_init:  24        # 1.5x 設定（GA から移行後の到達点）
+  n_init:  24        # the 1.5x setting (where we landed after migrating from the GA)
   n_iter:  60
-  q_batch:  4       # SST ループを BO で回す
-  patience: 10       # 12.5(c) フェーズ対応 patience。フェーズ別の判定軸
-                     # （bootstrap=min_shortfall / CEI=feasible cost）で 10 反復連続
-                     # 無改善なら打ち切り（相切替でリセット・床 n_iter/3）。0 で無効。
+  q_batch:  4       # drive the SST loop with BO
+  patience: 10       # phase-aware patience for 12.5(c). Stop when there is no improvement for 10
+                     # consecutive iterations on the criterion of the current phase
+                     # (bootstrap=min_shortfall / CEI=feasible cost); it resets on a phase switch
+                     # and has a floor of n_iter/3. Set to 0 to disable.
 
-# SST（外側ループ）の問題サイズ上限。遷移は変数空間を拡大せず「移動」させる。
-# 上限は**構造決定用のバイナリ変数（候補アーク）の数のみ**で規定する（2026-07-10 ユーザ決定。
-# 旧 max_variables=20（総数上限）は撤廃）。根拠：組合せ爆発（2^n のトポロジー）を起こすのは
-# バイナリだけで、連続変数はユニット数に比例して増えるだけ（1トポロジーあたりの内側最適化が
-# 重くなるのみ）。連続の増加が BO の収束を鈍らせる場合は bo.n_init 側で調整する。
-max_binary_variables: 8    # バイナリ（候補アーク）の上限。2^8=256 トポロジーまで
-                           #   （2026-07-07 に 6→8：高目標化でゲート段2つ(4本)＋リサイクル
-                           #   トグルペア2組(4本)が同時に載る余地を確保）
-min_variables: 4           # 総数の下限。縮退して遷移が死ぬのを防ぐ目安（弾くハード制約ではない）。
-                           #   構造下限（膜1段必須など）は設けない——破綻は validate が防ぎ、
-                           #   骨格を固定しない方が「想定外構造の提案」という手法の主張と整合する。
+# Upper limit on the problem size of the SST (outer loop). A transition moves the variable space
+# rather than expanding it.
+# The limit is defined by **the number of binary variables (candidate arcs) used for structural
+# decisions only** (user decision 2026-07-10; the old max_variables=20, a cap on the total, was
+# removed). Rationale: only the binaries cause a combinatorial explosion (2^n topologies), while
+# the continuous variables merely grow in proportion to the number of units (they only make the
+# inner optimisation of a single topology heavier). If the growth in continuous variables slows
+# down the convergence of the BO, adjust bo.n_init instead.
+max_binary_variables: 8    # upper limit on the binaries (candidate arcs). Up to 2^8=256 topologies
+                           #   (raised from 6 to 8 on 2026-07-07: the tougher targets need room for
+                           #   two gated stages (4 arcs) plus two recycle toggle pairs (4 arcs) to
+                           #   sit on the superstructure at the same time)
+min_variables: 4           # lower limit on the total. A guideline to prevent the space from
+                           #   degenerating and the transitions from dying (not a hard constraint
+                           #   that rejects anything).
+                           #   No structural lower bound (such as requiring at least one membrane
+                           #   stage) is imposed -- validate prevents breakage, and not fixing the
+                           #   skeleton is consistent with the claim of the method that it proposes
+                           #   unforeseen structures.

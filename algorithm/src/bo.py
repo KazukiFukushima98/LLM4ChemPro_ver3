@@ -1,42 +1,60 @@
-"""ベイズ最適化（BoTorch Constrained BO 標準パイプライン）。
+"""Bayesian optimization (standard BoTorch constrained-BO pipeline).
 
-GA と並走する内側ループ。Evaluator Protocol 経由で評価する点は ga.py と同じで、
-ga.py と差し替え可能な run_bo(ss, case, evaluator, seed) シグネチャを提供する。
+Inner loop that runs alongside the GA. Like ga.py, it evaluates points through the
+Evaluator Protocol, and it exposes the same run_bo(ss, case, evaluator, seed)
+signature so that it can be swapped in for ga.py.
 
-設計（二相式 Constrained BO・2026-07-08 run22 の教訓で二相化）:
-    - **第1相（bootstrap）**: feasible 観測がゼロの間は、エネルギーを完全に無視して
-      「制約不足量 max(0,πmin−π)+max(0,ρmin−ρ)」を単一 GP + qLogEI で最小化する。
-      根拠: 全点 infeasible だと CEI の P(feasible) が平坦化して実質エネルギー最小化器に
-      縮退し、高エネルギー側の feasible 盆地に永遠に到達しない（run22 で実測）。
-      penalty 法(λ=1e5)も同盆地を fitness 上選ばないため、λ 不要の不足量直接最小化を採る。
-    - **第2相（CEI）**: 初の feasible 観測が出た反復から従来の Constrained EI に切替：
-      3 outcome を別々の GP で学習（energy=目的、purity・recovery=制約）、ModelListGP +
-      qLogExpectedImprovement(constraints, objective)。feasible 圏内でエネルギーを削る。
-    - bad 観測（is_buildable 失敗・Aspen クラッシュ）は energy=観測最大値の倍にクリップして
-      GP に渡す→ infeasible 領域として正しく学習され、CEI が自動的に避ける。
-      実行時 bad は retry_bad 回まで同一トポロジーで再評価（一時的 wedge の偽 infeasible
-      汚染を防ぐ。リトライ後も bad なら真の非収束として学習）
-    - ビルド不能なバイナリ組合せは fixed_features_list から事前除外（予算の希釈防止）
-    - best_f は feasible（両制約満たす）観測のうち energy 最良。**全 infeasible のまま
-      終了した場合は min-shortfall の観測を返す**（同率は penalty 込み fitness で
-      tie-break。12.5(a)。bootstrap: off なら旧来の penalty-min）
-    - **対数スケール化（12.5(b)）**: bounds 比 50 倍超の正の連続変数は GP/acqf/Sobol の
-      内部表現を log 空間にする（線形 Normalize では細い盆地が潰れて GP に見えない問題
-      への対処）。evaluator へ渡す直前と best 返却時のみ実スケールへ戻す。
-      **注**: 12.3 の Lee 整合 bounds（area 比15・p_perm 比9.9・permeance 比12）では
-      比 50 を超える変数が無く**発火しない**（bounds_override 等で広い範囲を使う
-      将来ケースへの保険として維持。起動ログの log_scale=off 表示は正常）
-    - **ロールバック口**: case.yaml の bo: に `bootstrap: off` / `retry_bad: 0` /
-      `log_scale_inputs: off` を書けばコード変更なしで旧挙動に戻る
+Design (two-phase constrained BO; split into two phases from the run22 lessons of
+2026-07-08):
+    - **Phase 1 (bootstrap)**: while no feasible observation exists, energy is ignored
+      entirely and the constraint shortfall max(0,pi_min-pi)+max(0,rho_min-rho) is
+      minimized with a single GP + qLogEI.
+      Rationale: when every point is infeasible, the P(feasible) term of CEI flattens
+      out and CEI degenerates into a plain energy minimizer, so it never reaches the
+      feasible basin on the high-energy side (observed in run22). A penalty method
+      (lambda=1e5) does not pick that basin on fitness either, so we minimize the
+      shortfall directly, which needs no lambda.
+    - **Phase 2 (CEI)**: from the iteration in which the first feasible observation
+      appears, switch to the usual constrained EI: three outcomes learned by separate
+      GPs (energy = objective, purity and recovery = constraints), ModelListGP +
+      qLogExpectedImprovement(constraints, objective). This trims energy inside the
+      feasible region.
+    - Bad observations (is_buildable failure, Aspen crash) are passed to the GP with
+      energy clipped to twice the largest observed value -> they are learned correctly
+      as an infeasible region and CEI avoids them automatically.
+      Runtime bad points are re-evaluated on the same topology up to retry_bad times
+      (this prevents a transient wedge from contaminating the GP with spurious
+      infeasible points; if it is still bad after the retry, it is learned as genuine
+      non-convergence).
+    - Unbuildable binary combinations are excluded from fixed_features_list up front
+      (so the budget is not diluted).
+    - best_f is the best energy among feasible observations (both constraints met).
+      **If the run ends with everything still infeasible, the min-shortfall
+      observation is returned** (ties broken by the penalized fitness; 12.5(a). With
+      bootstrap: off, the legacy penalty-minimum is used instead).
+    - **Log scaling (12.5(b))**: positive continuous variables whose bounds ratio
+      exceeds 50 are represented internally (GP/acqf/Sobol) in log space. This
+      addresses the problem that a linear Normalize squashes narrow basins until the
+      GP cannot see them. Values are converted back to the real scale only just
+      before being passed to the evaluator and when the best point is returned.
+      **Note**: with the Lee-consistent bounds of 12.3 (area ratio 15, p_perm ratio
+      9.9, permeance ratio 12) no variable exceeds a ratio of 50, so this **never
+      fires** (it is kept as insurance for future cases that use wider ranges, e.g.
+      via bounds_override; the log_scale=off line in the startup log is normal).
+    - **Rollback switches**: writing `bootstrap: off` / `retry_bad: 0` /
+      `log_scale_inputs: off` under bo: in case.yaml restores the old behavior with
+      no code change.
 
-パイプライン:
-    1. Sobol 初期サンプル（n_init 点）
-    2. 3 GP を fit（ModelListGP）：energy/purity/recovery
-    3. qLogEI(constraints=[purity≥purity_min, recovery≥recovery_min]) を optimize_acqf_mixed で最大化
-    4. q_batch 点を取得 → 同一 binary key でグループ化して Aspen build 償却
-    5. n_iter 回反復
+Pipeline:
+    1. Sobol initial sample (n_init points)
+    2. Fit 3 GPs (ModelListGP): energy/purity/recovery
+    3. Maximize qLogEI(constraints=[purity>=purity_min, recovery>=recovery_min]) with
+       optimize_acqf_mixed
+    4. Take q_batch points -> group by identical binary key to amortize the Aspen build
+    5. Repeat n_iter times
 
-case.yaml への変更は不要：bo: セクションが無い場合は本ファイル内の defaults を使う。
+No change to case.yaml is required: if there is no bo: section, the defaults in this
+file are used.
 """
 
 from __future__ import annotations
@@ -79,54 +97,63 @@ from topology import (  # noqa: E402
 )
 
 
-# bo: セクションが case.yaml に無い場合の defaults（n_init ≈ 2-3d 目安、d=binary+continuous）
-# bootstrap / retry_bad は run22 の教訓（2026-07-08）による安定化。case.yaml の bo: に
-# `bootstrap: off` / `retry_bad: 0` を書けばコード変更なしで旧挙動へ戻せる（ロールバック口）。
+# Defaults used when case.yaml has no bo: section (n_init ~= 2-3d as a guide, d=binary+continuous)
+# bootstrap / retry_bad are stabilizations from the run22 lessons (2026-07-08). Writing
+# `bootstrap: off` / `retry_bad: 0` under bo: in case.yaml restores the old behavior with no
+# code change (rollback switch).
 _BO_DEFAULTS: dict[str, Any] = {
     "n_init":  16,
     "n_iter":  40,
     "q_batch":  4,
-    # 第1相（feasible 観測ゼロの間）の獲得関数:
-    #   "shortfall": エネルギーを無視し制約不足量のみ最小化（既定）。
-    #     根拠: 全点 infeasible だと CEI の P(feasible) 項が平坦化して実質エネルギー
-    #     最小化器に縮退し、高エネルギー側にある feasible 盆地（run22 probe で存在証明済み、
-    #     E≈3倍）へ永遠に行かない。penalty 法(λ=1e5)も同盆地を fitness で選ばない
-    #     （2192 vs 6226）ため、λ 不要の不足量直接最小化を第1相とする。
-    #   "off": 常に CEI（run21 までの挙動）。
+    # Acquisition function for phase 1 (while there is no feasible observation):
+    #   "shortfall": ignore energy and minimize only the constraint shortfall (default).
+    #     Rationale: when every point is infeasible, the P(feasible) term of CEI flattens
+    #     out and CEI degenerates into a plain energy minimizer, so it never reaches the
+    #     feasible basin on the high-energy side (proven to exist by the run22 probe,
+    #     E ~= 3x). A penalty method (lambda=1e5) does not pick that basin on fitness
+    #     either (2192 vs 6226), so phase 1 minimizes the shortfall directly, with no lambda.
+    #   "off": always CEI (the behavior up to run21).
     "bootstrap": "shortfall",
-    # 実行時 bad（wedge/クラッシュ）の同一トポロジー内リトライ回数。
-    # 一時的 wedge（実測15-20%）が purity=0/recovery=0 の偽 infeasible として
-    # GP を汚染するのを防ぐ。リトライしても bad ＝ 真の非収束として学習される。
+    # Number of retries within the same topology for runtime bad points (wedge/crash).
+    # Prevents a transient wedge (15-20% in practice) from contaminating the GP as a
+    # spurious infeasible point with purity=0/recovery=0. If it is still bad after the
+    # retry, it is learned as genuine non-convergence.
     "retry_bad": 1,
-    # フェーズ対応 patience（12.5(c)）。頭打ち後の空転（反復あたり~30分）を適応的に
-    # 打ち切る。素朴な連続無改善カウントは棄却済み（run21 の 66%/50% 改善・run22 の
-    # 34% 改善を切り捨てた）ため、次の3点で誤打ち切りを防ぐ：
-    #   (1) 判定軸をフェーズ別にする（bootstrap=min_shortfall / CEI=feasible objective）
-    #   (2) 相切替（bootstrap→CEI）でカウンタをリセットする
-    #   (3) 床 n_iter/3 反復までは打ち切らない
-    # 0 で無効（常に n_iter まで回る）。
+    # Phase-aware patience (12.5(c)). Adaptively cuts off idle spinning once progress has
+    # plateaued (~30 min per iteration). A naive consecutive-no-improvement count was
+    # rejected (it would have discarded the 66%/50% improvement of run21 and the 34%
+    # improvement of run22), so three measures prevent premature cutoff:
+    #   (1) make the decision axis phase-specific (bootstrap=min_shortfall / CEI=feasible objective)
+    #   (2) reset the counter on a phase switch (bootstrap->CEI)
+    #   (3) never cut off before a floor of n_iter/3 iterations
+    # 0 disables it (always runs to n_iter).
     "patience": 10,
-    # 連続変数の対数スケール化（12.5(b)）。bounds 比が _LOG_SCALE_RATIO 倍を超える
-    # 正の連続変数を GP/acqf/Sobol の内部表現で log 変換する。"off" で線形固定。
-    # 注: 12.3 の Lee 整合 bounds では全変数が比 50 未満のため対象ゼロ＝実質不発火
-    # （bounds_override 等で広い範囲を使う将来ケースへの保険として維持）。
+    # Log scaling of continuous variables (12.5(b)). Positive continuous variables whose
+    # bounds ratio exceeds _LOG_SCALE_RATIO are log-transformed in the internal
+    # GP/acqf/Sobol representation. "off" pins the scale to linear.
+    # Note: with the Lee-consistent bounds of 12.3 every variable has a ratio below 50, so
+    # nothing is selected and this effectively never fires (kept as insurance for future
+    # cases that use wider ranges, e.g. via bounds_override).
     "log_scale_inputs": "on",
 }
 
-# log 変換対象の bounds 比しきい値（12.5(b)：「bounds 比 50 倍超の正の連続変数」）
+# Bounds-ratio threshold for log transformation (12.5(b): "positive continuous variables
+# whose bounds ratio exceeds 50")
 _LOG_SCALE_RATIO = 50.0
 
 
 class _PhasePatience:
-    """フェーズ対応 patience（12.5(c)）の状態機械（純ロジック・テスト可能）。
+    """State machine for phase-aware patience (12.5(c)); pure logic, testable.
 
-    各反復の終わりに update(phase, axis, it) を呼ぶ。axis は「小さいほど良い」
-    フェーズ別の判定値（bootstrap=min_shortfall / cei=feasible objective の最小）。
-    True が返ったら打ち切り。ルール:
-      - 相が切り替わったらカウンタと基準値をリセット（切替直後に打ち切らない）
-      - axis が改善（strict に減少）したらカウンタリセット
-      - 無改善が patience 回連続し、かつ完了反復数が floor_iters 以上なら打ち切り
-      - patience <= 0 なら常に False（無効）
+    Call update(phase, axis, it) at the end of each iteration. axis is the
+    phase-specific decision value, lower is better (bootstrap=min_shortfall /
+    cei=minimum feasible objective). A return of True means stop. Rules:
+      - on a phase switch, reset the counter and the reference value (never stop
+        immediately after a switch)
+      - reset the counter whenever axis improves (strictly decreases)
+      - stop once there have been patience consecutive non-improvements and at least
+        floor_iters iterations have completed
+      - always False when patience <= 0 (disabled)
     """
 
     def __init__(self, patience: int, floor_iters: int) -> None:
@@ -153,11 +180,12 @@ class _PhasePatience:
 
 
 def _is_off(value: Any) -> bool:
-    """case.yaml のフラグ値が「off」を意味するか判定する。
+    """Decide whether a flag value from case.yaml means "off".
 
-    YAML 1.1（PyYAML）は素の `off`/`no`/`false` を bool False にパースするため、
-    文字列比較 `value != "off"` だけではロールバック口が効かない。文字列・bool の
-    両表現を吸収する（"shortfall" 等の有効値は off 扱いにならない）。
+    YAML 1.1 (PyYAML) parses bare `off`/`no`/`false` into the bool False, so a plain
+    string comparison `value != "off"` would leave the rollback switch ineffective.
+    This absorbs both the string and bool representations (valid values such as
+    "shortfall" are not treated as off).
     """
     if isinstance(value, str):
         return value.strip().lower() in ("off", "false", "no", "0")
@@ -165,10 +193,12 @@ def _is_off(value: Any) -> bool:
 
 
 def _log_scale_mask(n_bin: int, cont_vars: list[dict], enabled: bool) -> np.ndarray:
-    """内部表現（GP/acqf/Sobol）で log 変換する次元のマスクを返す（長さ d = n_bin + n_cont）。
+    """Return the mask of dimensions log-transformed in the internal representation
+    (GP/acqf/Sobol); length d = n_bin + n_cont.
 
-    対象は「下限が正で bounds 比 > _LOG_SCALE_RATIO の連続変数」。binary 次元は常に False。
-    enabled=False（log_scale_inputs: off）なら全 False＝線形スケール（旧挙動）。
+    Selected are "continuous variables with a positive lower bound and a bounds ratio >
+    _LOG_SCALE_RATIO". Binary dimensions are always False.
+    With enabled=False (log_scale_inputs: off) everything is False = linear scale (old behavior).
     """
     mask = np.zeros(n_bin + len(cont_vars), dtype=bool)
     if not enabled:
@@ -181,9 +211,11 @@ def _log_scale_mask(n_bin: int, cont_vars: list[dict], enabled: bool) -> np.ndar
 
 
 def _to_eval_space(x_np: np.ndarray, log_mask: np.ndarray) -> np.ndarray:
-    """内部表現（log 空間の列を含む）を evaluator に渡す実スケールへ変換する。
+    """Convert the internal representation (which includes log-space columns) to the
+    real scale passed to the evaluator.
 
-    x_np は (N, d)。log_mask の立った列だけ exp する（binary・線形列はそのまま）。
+    x_np is (N, d). Only the columns flagged in log_mask are exponentiated (binary and
+    linear columns are left as they are).
     """
     out = x_np.copy()
     if log_mask.any():
@@ -193,11 +225,11 @@ def _to_eval_space(x_np: np.ndarray, log_mask: np.ndarray) -> np.ndarray:
 
 def _fitness(obj_value: float, purity: float, recovery: float,
              targets: dict, penalty_w: float) -> float:
-    """ロギング・互換用の penalty 込み fitness（GA._fitness と同一定義）。
+    """Penalized fitness for logging and compatibility (same definition as GA._fitness).
 
-    obj_value は目的値（energy または cost。12.2 の objective 切替に追従）。
-    Constrained BO 本体は使わない（acqf が constraints + objective で扱う）。
-    gen_log / best 戻り値の表示・SST 互換のためだけに残す。
+    obj_value is the objective value (energy or cost; it follows the objective switch of 12.2).
+    The constrained BO itself does not use this (the acqf handles constraints + objective).
+    It is kept only for displaying gen_log / the best return value and for SST compatibility.
     """
     if obj_value >= BAD_VALUE:
         return BAD_VALUE
@@ -218,29 +250,34 @@ def _evaluate_batch_multi(
     retry_bad: int = 1,
     objective_fn=None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
-    """binary key でグループ化 → 各グループを 1 ビルドで一括評価。目的値＋3 outcome を返す。
+    """Group by binary key -> evaluate each group in a single build. Returns the objective plus 3 outcomes.
 
-    GA の `_evaluate_population` と同じ畳み込み（同一 binary に固まった点は 1 Aspen build
-    で q 点まとめて simulate）。連続 x はテンプレート全次元から `x_for_topology` で
-    具体トポロジー（pruning 後）の変数だけに絞って渡す（evaluator 側の位置 zip との整列）。
+    Same folding as the GA's `_evaluate_population` (points sharing a binary key are
+    simulated q at a time from one Aspen build). The continuous x is narrowed by
+    `x_for_topology` from the full template dimensions down to the variables of the
+    concrete topology (after pruning) before being passed on, so that it lines up with
+    the positional zip on the evaluator side.
 
-    retry_bad > 0 のとき、ビルド可能なのに bad が返った x だけを同一トポロジーで
-    再評価する（最大 retry_bad 回）。一時的 COM wedge（実測15-20%）による偽の
-    purity=0/recovery=0 観測が GP を汚染し探索を歪めるのを防ぐ。リトライしても
-    bad な点は真の非収束として残す（infeasible 学習は正しい挙動）。
-    is_buildable で弾かれたグループは決定論的な構造不能なのでリトライしない。
+    When retry_bad > 0, only the x that came back bad although they were buildable are
+    re-evaluated on the same topology (up to retry_bad times). This prevents spurious
+    purity=0/recovery=0 observations caused by a transient COM wedge (15-20% in
+    practice) from contaminating the GP and skewing the search. Points that are still
+    bad after the retry are kept as genuine non-convergence (learning them as
+    infeasible is the correct behavior).
+    Groups rejected by is_buildable are deterministically unbuildable structures, so they
+    are not retried.
 
-    objective_fn（12.2）: `(metrics, x_cont_template, topology) -> float` を渡すと
-    objective_arr がその値になる（コスト目的）。None なら objective = energy。
+    objective_fn (12.2): passing `(metrics, x_cont_template, topology) -> float` makes
+    objective_arr take that value (cost objective). With None, objective = energy.
 
     Returns
     -------
-    objective_arr: (N,) 最適化の目的値（energy または cost。bad は BAD_VALUE）
-    energy_arr   : (N,) specific_energy_kWh_tCO2（bad は BAD_VALUE）
-    purity_arr   : (N,) purity [0,1]（bad は 0.0）
-    recovery_arr : (N,) recovery [0,1]（bad は 0.0）
-    valid_mask   : (N,) bool（True = bad でない＝有効観測）
-    n_evals      : 実際の Aspen 評価回数（リトライ分を含む。>= N）
+    objective_arr: (N,) objective value of the optimization (energy or cost; BAD_VALUE if bad)
+    energy_arr   : (N,) specific_energy_kWh_tCO2 (BAD_VALUE if bad)
+    purity_arr   : (N,) purity [0,1] (0.0 if bad)
+    recovery_arr : (N,) recovery [0,1] (0.0 if bad)
+    valid_mask   : (N,) bool (True = not bad = valid observation)
+    n_evals      : actual number of Aspen evaluations (including retries; >= N)
     """
     N = x_np.shape[0]
     groups: dict[tuple, list[tuple[int, list[float]]]] = defaultdict(list)
@@ -265,7 +302,8 @@ def _evaluate_batch_multi(
         else:
             x_list = [x_for_topology(x_cont, cont_vars, topology) for _, x_cont in items]
             metrics_list = evaluator.evaluate_topology(topology, x_list)
-            # 一時的 wedge 対策: bad だけを再評価（真の非収束は retry 後も bad のまま）
+            # Transient-wedge countermeasure: re-evaluate only the bad points (genuine
+            # non-convergence stays bad after the retry)
             for _ in range(max(0, retry_bad)):
                 bad_pos = [
                     k for k, m in enumerate(metrics_list)
@@ -302,7 +340,7 @@ def _evaluate_batch_multi(
 
 
 def _select_device() -> torch.device:
-    """GPU があれば cuda:0、無ければ CPU（テスト時のフォールバック）。"""
+    """cuda:0 if a GPU is available, otherwise CPU (fallback for testing)."""
     return torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
 
@@ -312,7 +350,7 @@ def _sobol_initial(
     n_bin: int,
     seed: int,
 ) -> torch.Tensor:
-    """Sobol で n_init 点を生成し、binary 部分のみ {0,1} に丸める。"""
+    """Generate n_init Sobol points and round only the binary part to {0,1}."""
     d = bounds.shape[1]
     sobol = SobolEngine(dimension=d, scramble=True, seed=seed)
     raw = sobol.draw(n_init).to(dtype=bounds.dtype, device=bounds.device)  # in [0,1]^d
@@ -323,12 +361,15 @@ def _sobol_initial(
 
 
 def _build_fixed_features(ss: dict, bin_vars: list[dict]) -> list[dict[int, float]]:
-    """binary の組み合わせを fixed_features_list 形式で返す（ビルド不能な組合せは除外）。
+    """Return the binary combinations in fixed_features_list form (unbuildable combinations excluded).
 
-    トグルペア両ON等の構造的にビルド不能な組合せは決定論的に分かっているので、
-    「提案→BAD→学習で回避」という無駄なループに載せず最初から獲得関数の探索空間
-    から外す（run22: 16トポロジー中の無効組合せが 264 評価の予算を希釈した教訓）。
-    全組合せが不能な病的ケースのみ、防御として全列挙にフォールバックする。
+    Structurally unbuildable combinations, such as both sides of a toggle pair being ON,
+    are known deterministically, so instead of putting them through the wasteful
+    "propose -> BAD -> learn to avoid" loop they are removed from the acquisition
+    function's search space from the start (run22 lesson: invalid combinations among the
+    16 topologies diluted a budget of 264 evaluations).
+    Only in the pathological case where every combination is unbuildable do we fall back
+    to the full enumeration as a safeguard.
     """
     n_bin = len(bin_vars)
     if n_bin == 0:
@@ -339,7 +380,7 @@ def _build_fixed_features(ss: dict, bin_vars: list[dict]) -> list[dict[int, floa
         q_active = {bv["name"]: v for bv, v in zip(bin_vars, combo)}
         if is_buildable(active_topology(ss, q_active)) is None:
             buildable.append({i: float(b) for i, b in enumerate(combo)})
-    if not buildable:  # 防御（SS テンプレが病的な場合のみ）
+    if not buildable:  # safeguard (only for a pathological SS template)
         return [{i: float(b) for i, b in enumerate(c)} for c in all_combos]
     return buildable
 
@@ -352,9 +393,9 @@ def _make_gp(
     bounds: torch.Tensor,
     d: int,
 ):
-    """1 outcome 用の GP を作る。binary がある場合 MixedSingleTaskGP、無い場合 SingleTaskGP。
+    """Build the GP for one outcome: MixedSingleTaskGP if there are binaries, otherwise SingleTaskGP.
 
-    train_y_single は (N, 1) 形状（BoTorch outcome dim を明示）。
+    train_y_single has shape (N, 1) (the BoTorch outcome dim made explicit).
     """
     outcome_transform = Standardize(m=1)
     input_transform   = Normalize(d=d, bounds=bounds)
@@ -378,10 +419,11 @@ def _clip_bad_energy(
     energy_arr: np.ndarray,
     valid_mask: np.ndarray,
 ) -> np.ndarray:
-    """bad な energy を「有効観測の最大値の2倍」にクリップ。
+    """Clip bad energies to "twice the largest valid observation".
 
-    GP fit を壊さず、infeasible として正しく学習される（CEI が自動回避）。
-    全 invalid の場合は BAD_VALUE をそのまま使う（rare、初期 Sobol で全失敗）。
+    This does not break the GP fit and is learned correctly as infeasible (CEI avoids it
+    automatically).
+    If everything is invalid, BAD_VALUE is used as it is (rare; all initial Sobol points failed).
     """
     out = energy_arr.copy()
     if valid_mask.any():
@@ -396,25 +438,27 @@ def run_bo(
     evaluator: Evaluator,
     seed: int = 1,
 ) -> tuple[Any, list[dict], int]:
-    """BoTorch Constrained BO で ss の連続・バイナリ変数を最適化する。
+    """Optimize the continuous and binary variables of ss with BoTorch constrained BO.
 
-    ga.run_ga と同一シグネチャ。run_iteration.py から optimizer フラグで切り替えて呼ぶ。
+    Same signature as ga.run_ga. run_iteration.py selects between them with the optimizer flag.
 
-    目的：energy（specific_energy_kWh_tCO2）を最小化。
-          case.yaml の optimization_targets.objective が "minimize_cost" のときは
-          年間換算回収コスト [$/tCO2]（evaluator.cost_per_tco2、12.2）を最小化
-    制約：purity ≥ purity_min, recovery ≥ recovery_min（case.yaml から）
+    Objective: minimize energy (specific_energy_kWh_tCO2).
+               When optimization_targets.objective in case.yaml is "minimize_cost",
+               minimize the annualized capture cost [$/tCO2] (evaluator.cost_per_tco2, 12.2)
+    Constraints: purity >= purity_min, recovery >= recovery_min (from case.yaml)
 
     Returns
     -------
-    best     : 最良の x（DEAP Individual 互換の素な list）。feasible 観測があれば
-               その中の energy 最小。全 infeasible なら min-shortfall の観測
-               （同率は penalty 込み fitness で tie-break）。bootstrap: off のときのみ
-               旧来の penalty 込み fitness 最小
-    gen_log  : [{"gen": i, "best_fitness": f, "phase": ...}, ...]（長さ ≤ n_iter。
-               patience 打ち切り時は短くなり、最終要素に "early_stop" キーが付く）
-               best_fitness は penalty 込み値で、SST signals 互換のため
-    n_evals  : 総評価回数
+    best     : the best x (a plain list, compatible with a DEAP Individual). If there are
+               feasible observations, the one among them with the lowest energy. If
+               everything is infeasible, the min-shortfall observation (ties broken by the
+               penalized fitness). Only with bootstrap: off is the legacy minimum of the
+               penalized fitness used
+    gen_log  : [{"gen": i, "best_fitness": f, "phase": ...}, ...] (length <= n_iter; shorter
+               when patience cuts the run off, in which case the last element carries an
+               "early_stop" key)
+               best_fitness is the penalized value, for SST signals compatibility
+    n_evals  : total number of evaluations
     """
     bin_vars  = binary_variables(ss)
     cont_vars = continuous_variables(ss, case.get("membrane_model"))
@@ -426,47 +470,51 @@ def run_bo(
     purity_min   = float(targets["purity_min"])
     recovery_min = float(targets["recovery_min"])
 
-    # ---- 目的の切替（12.2）: energy（従来） / cost（$/tCO2）----
-    # cost モードでは第2相 CEI の目的 outcome・best 選択・ロギング fitness がすべて
-    # cost 軸になる。第1相（bootstrap＝制約不足量の最小化）は目的に依らず不変。
+    # ---- Objective switch (12.2): energy (legacy) / cost ($/tCO2) ----
+    # In cost mode the objective outcome of phase 2 CEI, the best selection and the logging
+    # fitness all move to the cost axis. Phase 1 (bootstrap = minimizing the constraint
+    # shortfall) is unchanged regardless of the objective.
     cost_mode = str(targets.get("objective", "")).strip() == "minimize_cost"
     if cost_mode:
         econ = {**ECONOMICS_DEFAULTS, **(case.get("economics") or {})}
-        penalty_w = float(econ["penalty_weight"])   # コスト（<100 $/tCO2）スケールの λ（Lee の r）
+        penalty_w = float(econ["penalty_weight"])   # lambda on the cost (<100 $/tCO2) scale (Lee's r)
 
         def objective_fn(m: Metrics, x_cont: list[float], topology: dict) -> float:
             areas = membrane_areas_from_x(x_cont, cont_vars, topology)
             return cost_per_tco2(m, areas, case)
     else:
-        penalty_w = float(case.get("penalty_weight", 1e5))  # ロギング fitness 用のみ
+        penalty_w = float(case.get("penalty_weight", 1e5))  # for the logging fitness only
         objective_fn = None
 
     bo_cfg       = {**_BO_DEFAULTS, **case.get("bo", {})}
     n_init       = int(bo_cfg["n_init"])
     n_iter       = int(bo_cfg["n_iter"])
     q_batch      = int(bo_cfg["q_batch"])
-    # "shortfall" | "off"。YAML 1.1 は `off` を bool False にパースするので _is_off で吸収
+    # "shortfall" | "off". YAML 1.1 parses `off` into the bool False, so _is_off absorbs it
     bootstrap_on = not _is_off(bo_cfg.get("bootstrap", "shortfall"))
     retry_bad    = int(bo_cfg.get("retry_bad", 1))
     log_scale_on = not _is_off(bo_cfg.get("log_scale_inputs", "on"))
     patience     = int(bo_cfg.get("patience", 10))
-    # 床: n_iter/3 反復までは打ち切らない（12.5(c)。序盤の停滞での早期打ち切り防止）
+    # Floor: never cut off before n_iter/3 iterations (12.5(c); prevents an early cutoff
+    # during an initial plateau)
     tracker = _PhasePatience(patience, floor_iters=max(1, n_iter // 3))
 
     device = _select_device()
     dtype  = torch.double
 
-    # 対数スケール化（12.5(b)）: 対象次元は内部表現（bounds/Sobol/GP/acqf）を log 空間に
-    # 統一し、evaluator へ渡す直前と best 返却時だけ _to_eval_space で実スケールへ戻す。
+    # Log scaling (12.5(b)): for the selected dimensions the internal representation
+    # (bounds/Sobol/GP/acqf) is kept uniformly in log space, and _to_eval_space converts
+    # back to the real scale only just before passing to the evaluator and when returning best.
     log_mask = _log_scale_mask(n_bin, cont_vars, log_scale_on)
 
-    # bounds: shape (2, d)。binary 部分は [0,1]、continuous は cv["bounds"]（log 対象は log 空間）。
+    # bounds: shape (2, d). The binary part is [0,1]; continuous is cv["bounds"] (log space for
+    # the log-scaled ones).
     bounds_list = [[0.0, 1.0]] * n_bin + [list(cv["bounds"]) for cv in cont_vars]
     for k in np.flatnonzero(log_mask):
         bounds_list[k] = [float(np.log(bounds_list[k][0])), float(np.log(bounds_list[k][1]))]
     bounds = torch.tensor(bounds_list, dtype=dtype, device=device).T  # (2, d)
 
-    # 再現性: torch 側の全乱数を seed で固定（Sobol は engine の seed で別途）
+    # Reproducibility: fix all torch-side randomness with seed (Sobol is seeded separately on the engine)
     torch.manual_seed(seed)
 
     cat_dims = list(range(n_bin))
@@ -481,53 +529,58 @@ def run_bo(
           f"objective={'cost($/tCO2)' if cost_mode else 'energy(kWh/tCO2)'}, "
           f"patience={patience if patience > 0 else 'off'}"
           f"(floor={max(1, n_iter // 3)}), "
-          f"constraints: purity≥{purity_min}, recovery≥{recovery_min}")
+          f"constraints: purity>={purity_min}, recovery>={recovery_min}")
 
-    t0 = time.monotonic()   # 計算時間内訳の記録用（gen_log の "t"＝最適化開始からの経過秒）
+    t0 = time.monotonic()   # for the computation-time breakdown (gen_log "t" = seconds since the optimization started)
 
-    # ----- 1. Sobol 初期サンプル -----
-    # train_x_np は内部表現（log 対象列は log 空間＝log-uniform サンプリングになる）
+    # ----- 1. Sobol initial sample -----
+    # train_x_np is the internal representation (log-scaled columns are in log space, i.e.
+    # log-uniform sampling)
     train_x_np = _sobol_initial(n_init, bounds, n_bin, seed).detach().cpu().numpy()
     _t_init0 = time.monotonic()
     o_arr, e_arr, p_arr, r_arr, v_mask, n_evals = _evaluate_batch_multi(
         _to_eval_space(train_x_np, log_mask), ss, bin_vars, cont_vars, n_bin, evaluator,
         retry_bad=retry_bad, objective_fn=objective_fn
     )
-    init_eval_sec = round(time.monotonic() - _t_init0, 2)   # 初期サンプル評価の実時間
+    init_eval_sec = round(time.monotonic() - _t_init0, 2)   # wall time of the initial-sample evaluation
 
-    # 全観測を tensor へ（GP には目的値クリップ版を渡す、ロギング fitness は raw を使う）
+    # Move all observations to tensors (the GP gets the clipped objective; the logging fitness uses raw)
     all_x = torch.tensor(train_x_np, dtype=dtype, device=device)
-    all_o_raw = o_arr.copy()   # 目的値（energy または cost）
+    all_o_raw = o_arr.copy()   # objective value (energy or cost)
     all_p_raw = p_arr.copy()
     all_r_raw = r_arr.copy()
     all_v = v_mask.copy()
 
-    # ----- 2-4. BO ループ -----
+    # ----- 2-4. BO loop -----
     gen_log: list[dict] = []
     objective = LinearMCObjective(weights=torch.tensor([1.0, 0.0, 0.0], dtype=dtype, device=device))
 
     for it in range(n_iter):
-        o_capped = _clip_bad_energy(all_o_raw, all_v)   # 目的値（energy/cost 共通のクリップ）
+        o_capped = _clip_bad_energy(all_o_raw, all_v)   # objective value (same clipping for energy/cost)
         feasible_mask = (all_p_raw >= purity_min) & (all_r_raw >= recovery_min) & all_v
 
-        # ---- 二相切替（run22 の教訓・2026-07-08）----
-        # feasible 観測ゼロの間、CEI は P(feasible)≈0 が平坦化して実質エネルギー最小化器に
-        # 縮退し、高エネルギー側の feasible 盆地へ行かない。第1相ではエネルギーを完全に
-        # 無視して「制約不足量」だけを最小化し、初の feasible が出た反復から CEI に切替える。
-        # bootstrap="off" で常に CEI（run21 までの挙動）へ戻せる。
+        # ---- Two-phase switch (run22 lesson, 2026-07-08) ----
+        # While there is no feasible observation, CEI flattens out at P(feasible) ~= 0 and
+        # degenerates into a plain energy minimizer, so it never goes to the feasible basin
+        # on the high-energy side. Phase 1 ignores energy entirely and minimizes only the
+        # constraint shortfall, then switches to CEI from the iteration in which the first
+        # feasible point appears.
+        # bootstrap="off" reverts to always-CEI (the behavior up to run21).
         use_bootstrap = bootstrap_on and (not bool(feasible_mask.any()))
         phase = "bootstrap" if use_bootstrap else "cei"
 
-        # GP fit → acqf 最適化。失敗時（例: 初期 Sobol が全 bad で outcome の分散ゼロ、
-        # GP の数値不安定、acqf 最適化の内部エラー）はループを殺さず Sobol 探索に
-        # フォールバックして観測を増やす（次周期で有効観測が入れば GP に復帰する）。
-        _t_model0 = time.monotonic()   # 内訳計時: GP fit / acqf 最適化 / Aspen 評価
+        # GP fit -> acqf optimization. On failure (e.g. all initial Sobol points bad so an
+        # outcome has zero variance, GP numerical instability, an internal error in the acqf
+        # optimization) do not kill the loop: fall back to Sobol exploration to add
+        # observations (once valid observations come in, the next cycle returns to the GP).
+        _t_model0 = time.monotonic()   # breakdown timing: GP fit / acqf optimization / Aspen evaluation
         t_fit_sec = 0.0
         try:
             if use_bootstrap:
-                # ---- 第1相: 制約不足量の最小化（λ 不要・エネルギー無視）----
-                # bad 観測は purity=0/recovery=0 なので不足量が最大値になり、
-                # 自然に「近寄らない方がよい点」として学習される（retry 済みの残りは真の非収束）。
+                # ---- Phase 1: minimize the constraint shortfall (no lambda needed, energy ignored) ----
+                # Bad observations have purity=0/recovery=0, so their shortfall is maximal and
+                # they are naturally learned as "points not worth approaching" (what remains
+                # after the retries is genuine non-convergence).
                 shortfall = (
                     np.maximum(0.0, purity_min   - all_p_raw)
                     + np.maximum(0.0, recovery_min - all_r_raw)
@@ -541,8 +594,9 @@ def run_bo(
                 )
                 acqf = qLogExpectedImprovement(model=gp_s, best_f=best_f_tensor)
             else:
-                # ---- 第2相: Constrained EI（feasible 領域内で目的値を削る）----
-                # GP fit（目的値は最小化なので符号反転して max 化、bad は cap で infeasible 学習）
+                # ---- Phase 2: constrained EI (trim the objective inside the feasible region) ----
+                # GP fit (the objective is minimized, so the sign is flipped to maximize; bad
+                # points are capped and learned as infeasible)
                 train_o = torch.tensor(-o_capped, dtype=dtype, device=device).unsqueeze(-1)
                 train_p = torch.tensor(all_p_raw,  dtype=dtype, device=device).unsqueeze(-1)
                 train_r = torch.tensor(all_r_raw,  dtype=dtype, device=device).unsqueeze(-1)
@@ -554,18 +608,20 @@ def run_bo(
                 mll = SumMarginalLogLikelihood(model.likelihood, model)
                 fit_gpytorch_mll(mll)
 
-                # best_f: feasible 観測のうち目的値（-値）最大＝目的値最小。
-                # （bootstrap="off" の全 infeasible 時のみ旧来の「最悪未満」经路に入る）
+                # best_f: the largest objective (negated value) among feasible observations
+                # = the smallest objective.
+                # (The legacy "below the worst" path is taken only when everything is
+                # infeasible with bootstrap="off".)
                 if feasible_mask.any():
                     best_f = float(-o_capped[feasible_mask].min())  # = max(-objective)
                 else:
-                    best_f = float(-o_capped.max() - 1.0)  # 最悪より下＝改善余地あり扱い
+                    best_f = float(-o_capped.max() - 1.0)  # below the worst = treated as leaving room to improve
                 best_f_tensor = torch.tensor(best_f, dtype=dtype, device=device)
 
-                # acqf: Constrained EI（制約は ≤0 で feasible の規約）
+                # acqf: constrained EI (the convention is that a constraint is feasible when <=0)
                 constraints = [
-                    lambda Z: purity_min   - Z[..., 1],  # purity   ≥ purity_min   ⇔ purity_min - purity ≤ 0
-                    lambda Z: recovery_min - Z[..., 2],  # recovery ≥ recovery_min ⇔ recovery_min - recovery ≤ 0
+                    lambda Z: purity_min   - Z[..., 1],  # purity   >= purity_min   <=> purity_min - purity <= 0
+                    lambda Z: recovery_min - Z[..., 2],  # recovery >= recovery_min <=> recovery_min - recovery <= 0
                 ]
                 acqf = qLogExpectedImprovement(
                     model=model,
@@ -575,7 +631,7 @@ def run_bo(
                 )
 
             t_fit_sec = round(time.monotonic() - _t_model0, 2)
-            # categorical 列挙 × continuous L-BFGS（両相共通）
+            # Categorical enumeration x continuous L-BFGS (common to both phases)
             candidates, _ = optimize_acqf_mixed(
                 acq_function=acqf,
                 bounds=bounds,
@@ -586,14 +642,14 @@ def run_bo(
             )
         except Exception as e:
             print(f"  [CBO] Iter {it+1}: GP/acqf failed ({type(e).__name__}: {e}) "
-                  f"→ Sobol フォールバックで {q_batch} 点探索")
-            if t_fit_sec == 0.0:   # fit 途中で失敗した場合はそこまでの時間を fit に計上
+                  f"-> falling back to Sobol, exploring {q_batch} points")
+            if t_fit_sec == 0.0:   # if the failure happened during the fit, attribute the elapsed time to fit
                 t_fit_sec = round(time.monotonic() - _t_model0, 2)
-            # seed は反復ごとに変えて重複サンプルを避ける（再現性は seed 起点で保たれる）
+            # Vary the seed per iteration to avoid duplicate samples (reproducibility is preserved from the base seed)
             candidates = _sobol_initial(q_batch, bounds, n_bin, seed=seed * 10007 + it + 1)
         t_acq_sec = round(time.monotonic() - _t_model0 - t_fit_sec, 2)
 
-        # 評価（candidates は内部表現なので実スケールへ戻して渡す）
+        # Evaluation (candidates are in the internal representation, so convert back to the real scale first)
         c_np = candidates.detach().cpu().numpy()
         _t_eval0 = time.monotonic()
         new_o, new_e, new_p, new_r, new_v, n_new = _evaluate_batch_multi(
@@ -602,7 +658,7 @@ def run_bo(
         )
         t_eval_sec = round(time.monotonic() - _t_eval0, 2)
 
-        # 観測を蓄積
+        # Accumulate the observations
         all_x     = torch.cat([all_x, candidates], dim=0)
         all_o_raw = np.concatenate([all_o_raw, new_o])
         all_p_raw = np.concatenate([all_p_raw, new_p])
@@ -610,23 +666,26 @@ def run_bo(
         all_v     = np.concatenate([all_v,     new_v])
         n_evals  += n_new
 
-        # ロギング: 全観測のうち最良の penalty 込み fitness（互換用。目的値ベース）
+        # Logging: the best penalized fitness over all observations (for compatibility; objective-based)
         all_fitness = np.array([
             _fitness(o, p, r, targets, penalty_w)
             for o, p, r in zip(all_o_raw, all_p_raw, all_r_raw)
         ])
         best_fit_log = float(all_fitness.min())
-        # phase は SST エージェント・分析用の診断情報（bootstrap=制約探索中 / cei=feasible 圏内）。
-        # "t" は最適化開始からの経過秒（best-so-far vs 時間の収束曲線・時間内訳の集計用）。
-        # t_fit/t_acq/t_eval はこの反復の内訳秒（GP 学習 / 獲得関数最適化 / Aspen 評価）。
+        # phase is diagnostic information for the SST agent and for analysis
+        # (bootstrap = still searching for constraints / cei = inside the feasible region).
+        # "t" is the seconds elapsed since the optimization started (for best-so-far vs time
+        # convergence curves and for aggregating the time breakdown).
+        # t_fit/t_acq/t_eval are this iteration's breakdown in seconds (GP training /
+        # acquisition-function optimization / Aspen evaluation).
         entry = {"gen": it + 1, "best_fitness": best_fit_log, "phase": phase,
                  "t": round(time.monotonic() - t0, 1),
                  "t_fit": t_fit_sec, "t_acq": t_acq_sec, "t_eval": t_eval_sec}
         if it == 0:
-            entry["t_init_eval"] = init_eval_sec   # Sobol 初期サンプル評価の実時間
+            entry["t_init_eval"] = init_eval_sec   # wall time of the Sobol initial-sample evaluation
         gen_log.append(entry)
 
-        # 進捗表示: best fitness と、feasible best 目的値（あれば）の両方
+        # Progress display: both the best fitness and the feasible best objective (if any)
         if feasible_mask.any():
             fo_min = float(o_capped[feasible_mask].min())
             print(f"  Iter {it+1:2d} [{phase}]: best_fit={best_fit_log:.1f}  feasible_obj_min={fo_min:.1f}")
@@ -638,9 +697,10 @@ def run_bo(
             print(f"  Iter {it+1:2d} [{phase}]: best_fit={best_fit_log:.1f}  "
                   f"(no feasible yet, min_shortfall={min_short:.3f})")
 
-        # ---- フェーズ対応 patience（12.5(c)）----
-        # 新観測を取り込んだ後の状態でフェーズと判定軸を確定する
-        # （bootstrap=min_shortfall / cei=feasible objective 最小。相切替でリセット）。
+        # ---- Phase-aware patience (12.5(c)) ----
+        # Determine the phase and the decision axis from the state after the new observations
+        # have been taken in (bootstrap=min_shortfall / cei=minimum feasible objective; reset
+        # on a phase switch).
         feas_now = (all_p_raw >= purity_min) & (all_r_raw >= recovery_min) & all_v
         if feas_now.any():
             phase_now = "cei"
@@ -654,18 +714,20 @@ def run_bo(
         if tracker.update(phase_now, axis, it):
             gen_log[-1]["early_stop"] = f"patience={patience} ({phase_now})"
             print(f"  [CBO] early stop at iter {it+1}/{n_iter}: "
-                  f"{phase_now} 軸で {patience} 反復連続無改善"
-                  f"（床 {max(1, n_iter // 3)} 反復は消化済み）")
+                  f"no improvement on the {phase_now} axis for {patience} consecutive iterations "
+                  f"(the floor of {max(1, n_iter // 3)} iterations has been served)")
             break
 
-    # ----- 5. best 個体を選んで DEAP Individual 互換 list で返す -----
-    # CBO は constraint satisfaction を優先する設計なので、feasible 観測があれば
-    # その中で目的値（energy/cost）最小を返す（infeasible 良点を選ぶと SST 判定軸に反する）。
-    # 全 infeasible のときは bootstrap 相の探索軸と返却軸を揃えて min-shortfall の
-    # 観測を返す（12.5(a)。run23 iter_004: 探索が踏んだ shortfall 0.014 の点が
-    # 旧 penalty-min 選択で埋もれ 0.063 が記録された）。同率は penalty 込み fitness
-    # で tie-break（lexsort は安定ソートなので同 seed で決定論的）。
-    # bootstrap: off のときのみ旧来の penalty-min フォールバック。
+    # ----- 5. Pick the best individual and return it as a DEAP-Individual-compatible list -----
+    # CBO is designed to prioritize constraint satisfaction, so if there are feasible
+    # observations it returns the one with the lowest objective (energy/cost) among them
+    # (picking a good infeasible point would contradict the SST decision axis).
+    # When everything is infeasible, the returned axis is aligned with the search axis of the
+    # bootstrap phase and the min-shortfall observation is returned (12.5(a); in run23
+    # iter_004 a point with shortfall 0.014 that the search had hit was buried by the legacy
+    # penalty-min selection and 0.063 was recorded instead). Ties are broken by the penalized
+    # fitness (lexsort is a stable sort, so it is deterministic for a given seed).
+    # Only with bootstrap: off is the legacy penalty-min fallback used.
     final_feasible_mask = (all_p_raw >= purity_min) & (all_r_raw >= recovery_min) & all_v
     if final_feasible_mask.any():
         objective_for_select = np.where(final_feasible_mask, all_o_raw, np.inf)
@@ -676,8 +738,9 @@ def run_bo(
             for o, p, r in zip(all_o_raw, all_p_raw, all_r_raw)
         ])
         if bootstrap_on:
-            # bad 観測は purity=0/recovery=0 で shortfall 最大に落ち、valid と同率の
-            # 場合も fitness（bad は BAD_VALUE）の tie-break で valid が勝つ
+            # Bad observations have purity=0/recovery=0 and thus fall to the maximum shortfall;
+            # even when they tie with a valid point, the tie-break on fitness (BAD_VALUE for
+            # bad) lets the valid point win
             shortfall = (
                 np.maximum(0.0, purity_min   - all_p_raw)
                 + np.maximum(0.0, recovery_min - all_r_raw)
@@ -685,7 +748,7 @@ def run_bo(
             best_idx = int(np.lexsort((all_fitness, shortfall))[0])
         else:
             best_idx = int(np.argmin(all_fitness))
-    # all_x は内部表現（log 空間含む）なので実スケールへ戻して返す
+    # all_x is the internal representation (including log space), so convert back to the real scale before returning
     best_x = _to_eval_space(all_x[best_idx].detach().cpu().numpy().reshape(1, -1), log_mask)[0]
     best_individual: list[float] = [float(v) for v in best_x]
 

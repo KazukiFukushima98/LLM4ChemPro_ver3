@@ -1,22 +1,24 @@
-"""SubprocessEvaluator の障害注入・耐久テスト（soak / chaos。Aspen 不要・決定論）。
+"""Fault-injection soak/chaos test for SubprocessEvaluator (no Aspen, deterministic).
 
-_chaos_worker.py が「現実の Aspen ワーカーが起こし得る故障」（wedge・クラッシュ・
-沈黙・stdout ゴミ・遅延）をグループごとにランダム（ただしシード決定論）に再現し、
-親（SubprocessEvaluator）の3つの生存不変条件を多数グループにわたって検証する：
+_chaos_worker.py reproduces the failures a real Aspen worker can exhibit (wedge,
+crash, silence, stdout junk, delay), chosen at random per group but deterministic
+under the seed, and this test checks three survival invariants of the parent
+(SubprocessEvaluator) across many groups:
 
-    1. evaluate_topology / evaluate_detailed は決して例外を投げず、
-       必ず len(x_list) 件の Metrics（受信分は canned、欠損分は bad）を返す
-    2. wedge / 異常終了時は kill が呼ばれ、それ以外では呼ばれない
-    3. テスト終了後にワーカーのゾンビプロセスが残らない
+    1. evaluate_topology / evaluate_detailed never raise, and always return
+       len(x_list) Metrics (canned for what was received, bad for what was lost)
+    2. kill is called on a wedge or an abnormal exit, and not otherwise
+    3. no zombie worker process is left behind after the test
 
-故障モードは behavior_for()（テストとワーカーで共有）で予言できるため、
-「完走した」だけでなく「各故障で期待どおりの結果になった」ことまで検証する。
+Because the failure mode is predictable through behavior_for() (shared by the
+test and the worker), this verifies not merely that the run completed but that
+each failure produced the expected result.
 
-実行:
-    uv run python -m unittest algorithm.tests.test_soak_chaos          # 既定 24 グループ（~1分）
-    CHAOS_GROUPS=200 uv run python -m unittest algorithm.tests.test_soak_chaos   # 本格 soak
-    （PowerShell: $env:CHAOS_GROUPS="200"; uv run python -m unittest ...）
-    CHAOS_SEED で故障系列を変えられる（既定 20260707）。
+Run:
+    uv run python -m unittest algorithm.tests.test_soak_chaos          # default 24 groups (~1 min)
+    CHAOS_GROUPS=200 uv run python -m unittest algorithm.tests.test_soak_chaos   # full soak
+    (PowerShell: $env:CHAOS_GROUPS="200"; uv run python -m unittest ...)
+    CHAOS_SEED changes the failure sequence (default 20260707).
 """
 
 from __future__ import annotations
@@ -42,11 +44,11 @@ CHAOS_WORKER = os.path.join(HERE, "_chaos_worker.py")
 
 CHAOS_GROUPS = int(os.environ.get("CHAOS_GROUPS", "24"))
 CHAOS_SEED = int(os.environ.get("CHAOS_SEED", "20260707"))
-STALL_SEC = 4.0  # 故障検知までの待ち。spawn jitter に耐える値（test_subprocess_evaluator と同基準）
+STALL_SEC = 4.0  # wait before declaring a failure; large enough to absorb spawn jitter (same basis as test_subprocess_evaluator)
 
 TOPO = {"vertices": {"V0": {"role": "feed"}}, "arcs": {}, "units": {}}
 
-# wedge / 異常終了として kill が呼ばれるべき故障モード
+# the failure modes that count as a wedge / abnormal exit and must trigger a kill
 KILL_BEHAVIORS = {"crash", "partial_hang", "hang_no_output"}
 
 
@@ -59,9 +61,9 @@ def _is_canned(m: Metrics) -> bool:
 
 
 def _alive_python_pids(pids: set[int]) -> list[int] | None:
-    """記録した PID のうち python プロセスとして生存しているものを返す。
+    """Return those of the recorded PIDs that are still alive as python processes.
 
-    tasklist が使えない環境では None（検証スキップ）。
+    Returns None where tasklist is unavailable (the check is then skipped).
     """
     try:
         out = subprocess.run(
@@ -84,7 +86,7 @@ def _alive_python_pids(pids: set[int]) -> list[int] | None:
 
 
 def _expected_pattern(behavior: str, n: int) -> list[str]:
-    """故障モードごとの期待結果（'canned' / 'bad' の並び）。"""
+    """The expected result per failure mode (a sequence of 'canned' / 'bad')."""
     if behavior in ("normal", "slow", "garbage"):
         return ["canned"] * n
     if behavior == "crash":
@@ -107,7 +109,7 @@ class _KillRecorder:
 class TestChaosSoak(unittest.TestCase):
 
     def test_soak_topology_groups(self) -> None:
-        """多数グループに故障を注入しても、結果の形・復旧・後始末の不変条件が守られる。"""
+        """Injecting failures across many groups still upholds the invariants on result shape, recovery and cleanup."""
         rng = random.Random(CHAOS_SEED)
         rec = _KillRecorder()
         behavior_counts: Counter[str] = Counter()
@@ -133,31 +135,31 @@ class TestChaosSoak(unittest.TestCase):
 
                 out = ev.evaluate_topology(TOPO, x_list)
 
-                # 不変条件1: 形が必ず揃う（例外はここまで到達した時点で無し）
+                # invariant 1: the shape always matches (reaching this point already proves nothing was raised)
                 self.assertEqual(
                     len(out), n,
-                    f"group {g} ({behavior}): {n} 件要求に {len(out)} 件返答",
+                    f"group {g} ({behavior}): {n} requested, got {len(out)} back",
                 )
-                # オラクル: 故障モードごとの期待パターン
+                # oracle: the expected pattern for this failure mode
                 for i, (m, exp) in enumerate(zip(out, _expected_pattern(behavior, n))):
                     if exp == "canned":
                         self.assertTrue(
                             _is_canned(m),
-                            f"group {g} ({behavior}) x[{i}]: canned 期待が {m}",
+                            f"group {g} ({behavior}) x[{i}]: expected canned, got {m}",
                         )
                     else:
                         self.assertTrue(
                             _is_bad(m),
-                            f"group {g} ({behavior}) x[{i}]: bad 期待が {m}",
+                            f"group {g} ({behavior}) x[{i}]: expected bad, got {m}",
                         )
 
-            # 不変条件2: kill は wedge / 異常終了のグループ数とちょうど一致
+            # invariant 2: the kill count matches the number of wedge / abnormal-exit groups exactly
             self.assertEqual(
                 rec.calls, expected_kills,
-                f"kill 回数 {rec.calls} != 期待 {expected_kills}（{dict(behavior_counts)}）",
+                f"kill count {rec.calls} != expected {expected_kills} ({dict(behavior_counts)})",
             )
 
-            # 不変条件3: ゾンビワーカーが残らない
+            # invariant 3: no zombie worker is left behind
             for name in os.listdir(pid_dir):
                 if name.endswith(".pid"):
                     pids.add(int(name[:-4]))
@@ -165,7 +167,7 @@ class TestChaosSoak(unittest.TestCase):
             if alive is not None:
                 self.assertEqual(
                     alive, [],
-                    f"ゾンビワーカー残存: PID {alive}",
+                    f"zombie workers left behind: PID {alive}",
                 )
 
         print(f"\n[soak] groups={CHAOS_GROUPS} seed={CHAOS_SEED} "
@@ -173,7 +175,7 @@ class TestChaosSoak(unittest.TestCase):
               f"workers_spawned={len(pids)}")
 
     def test_soak_detailed_calls(self) -> None:
-        """evaluate_detailed（best 詳細抽出の経路）も故障注入下で必ず DetailedResult を返す。"""
+        """evaluate_detailed (the path that extracts the details of the best) also always returns a DetailedResult under fault injection."""
         rng = random.Random(CHAOS_SEED + 1)
         rec = _KillRecorder()
 
@@ -190,13 +192,13 @@ class TestChaosSoak(unittest.TestCase):
                 behavior = behavior_for([x], CHAOS_SEED)
                 d = ev.evaluate_detailed(TOPO, x)
                 if behavior in ("normal", "slow", "garbage", "crash"):
-                    # crash は index0 送出後に exit するので detailed(1点) は受信済み
+                    # crash exits after emitting index 0, so the single detailed point has been received
                     self.assertTrue(_is_canned(d.metrics),
-                                    f"{behavior}: canned 期待が {d.metrics}")
+                                    f"{behavior}: expected canned, got {d.metrics}")
                     self.assertIn("V0", d.stream_results)
                 else:
                     self.assertTrue(_is_bad(d.metrics),
-                                    f"{behavior}: bad 期待が {d.metrics}")
+                                    f"{behavior}: expected bad, got {d.metrics}")
 
 
 if __name__ == "__main__":

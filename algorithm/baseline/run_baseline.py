@@ -1,23 +1,29 @@
-"""比較対象（12.6 一括最適化）ランナー：Lee Fig.2 型 SS を1回だけ最適化する。
+"""Baseline runner (12.6 single-shot optimization): optimize a Lee Fig.2-style SS once.
 
-SST との比較のための従来型手法：大きな超構造（ss_lee2/ss_lee3）を固定し、
-構造バイナリ＋連続変数を BO または GA で一括最適化する（構造遷移なし）。
+The conventional approach used as a comparison against SST: fix a large
+superstructure (ss_lee2/ss_lee3) and optimize the structural binaries together
+with the continuous variables in a single shot, using BO or GA (no structural
+transitions).
 
-既存 SST コード（src/）は一切変更しない。差分はすべて本スクリプト内の
-「実行時差し替え」に閉じる：
-  [BO]  bo._build_fixed_features → one-hot の有効組合せ（各出口ちょうど1本 ON）を
-        解析的に生成したリストを返す関数に差し替え（既定の 2^n 総当たり列挙は
-        3段版の n=24 で 1,677万通りになり実用不能なため）。
-        bo._sobol_initial → 初期点のバイナリ部を有効 one-hot 組合せに吸着させる
-        ラッパに差し替え（独立ビット丸めだと初期点がほぼ全て建設不能になるため）。
-  [GA]  run_iteration.run_ga → baseline/ga_onehot.run_ga_onehot に差し替え
-        （出口毎の行き先カテゴリカル遺伝子。詳細は ga_onehot.py 冒頭）。
+The existing SST code (src/) is left completely untouched. Every difference is
+confined to the "runtime substitution" performed inside this script:
+  [BO]  bo._build_fixed_features -> replaced by a function that simply returns an
+        analytically generated list of valid one-hot combinations (exactly one
+        arc ON per outlet). The default 2^n exhaustive enumeration is impractical:
+        the 3-stage case (n=24) would yield 16.77 million combinations.
+        bo._sobol_initial -> replaced by a wrapper that snaps the binary part of
+        the initial points onto valid one-hot combinations (with independent bit
+        rounding, nearly every initial point would be unbuildable).
+  [GA]  run_iteration.run_ga -> replaced by baseline/ga_onehot.run_ga_onehot
+        (one categorical gene per outlet selecting its destination; see the header
+        of ga_onehot.py for details).
 
-予算（2026-07-12 ユーザ決定）: 一括側には SST（run24 実測 1,449 評価）より
-明確に多い約 2,000 評価を与え、patience は無効化（0）＝早期打ち切りなし。
-「時間が足りなかった」という言い訳を許さないための設定。
+Budget (user decision, 2026-07-12): the single-shot side is given about 2,000
+evaluations, clearly more than SST (1,449 evaluations measured in run24), and
+patience is disabled (0), i.e. no early termination. This setting leaves no room
+for the excuse that "there was not enough time".
 
-usage（algorithm/ から）:
+usage (from algorithm/):
     uv run python baseline/run_baseline.py --ss lee2 --optimizer bo [--pilot] [--force]
 """
 
@@ -40,24 +46,26 @@ for p in (SRC, HERE):
 
 import topology as T  # noqa: E402
 
-# 本番予算: 約 2,000 評価（SST run24 実測 1,449 の ~1.4 倍）・patience 無効
+# Production budget: about 2,000 evaluations (~1.4x the 1,449 measured for SST
+# run24), patience disabled
 FULL_BO = {"n_init": 100, "n_iter": 475, "q_batch": 4, "patience": 0}
 FULL_GA = {"pop_size": 40, "n_gen": 50}                     # 40 + 50*40 = 2,040
-# パイロット: 配線確認用の縮小（実 Aspen・数分〜十数分）
+# Pilot: reduced budget for checking the plumbing (real Aspen, a few to ~15 minutes)
 PILOT_BO = {"n_init": 8, "n_iter": 4, "q_batch": 2, "patience": 0}
 PILOT_GA = {"pop_size": 6, "n_gen": 3}
 
 
 # =========================================================
-# one-hot 生成（BO 差し替えの中身。テストからも import される）
+# one-hot generation (the substance of the BO substitution; also imported by tests)
 # =========================================================
 
 def build_onehot_fixed_features(ss: dict[str, Any]) -> list[dict[int, float]]:
-    """「各出口の行き先はちょうど1つ」の有効組合せを解析的に全生成する。
+    """Analytically enumerate every valid "exactly one destination per outlet" combination.
 
-    2^n の総当たり（bo._build_fixed_features の既定）を踏まずに、
-    グループ（出口）毎の選択の直積 = Π|group| 個だけを直接作る。
-    lee2: 3^4 = 81、lee3: 4^6 = 4096。
+    Instead of the 2^n exhaustive enumeration (the default of
+    bo._build_fixed_features), build only the Cartesian product of the choices per
+    group (outlet) = prod|group| combinations.
+    lee2: 3^4 = 81, lee3: 4^6 = 4096.
     """
     from ga_onehot import onehot_groups
     bin_vars = T.binary_variables(ss)
@@ -72,28 +80,31 @@ def build_onehot_fixed_features(ss: dict[str, Any]) -> list[dict[int, float]]:
 
 
 def assert_all_buildable(ss: dict[str, Any], combos: list[dict[int, float]]) -> None:
-    """全 one-hot 組合せがビルド可能であることの実行時検証（設計不変条件）。"""
+    """Runtime check that every one-hot combination is buildable (a design invariant)."""
     bin_vars = T.binary_variables(ss)
     for ff in combos:
         q_active = {bv["name"]: int(ff[i]) for i, bv in enumerate(bin_vars)}
         reason = T.is_buildable(T.active_topology(ss, q_active))
-        assert reason is None, f"one-hot combo unbuildable: {q_active} → {reason}"
+        assert reason is None, f"one-hot combo unbuildable: {q_active} -> {reason}"
 
 
 def patch_bo_for_onehot(ss: dict[str, Any], seed: int) -> None:
-    """bo モジュールに one-hot 対応を実行時注入する（ソース無変更）。
+    """Inject one-hot support into the bo module at runtime (its source is unchanged).
 
-    - _build_fixed_features: 生成済み one-hot リストを返すだけの関数に
-    - _sobol_initial: 連続部は元の Sobol のまま、バイナリ部を one-hot 組合せ
-      （seed 決定論のランダム選択）で上書きするラッパに
+    - _build_fixed_features: becomes a function that just returns the pre-generated
+      one-hot list
+    - _sobol_initial: becomes a wrapper that keeps the original Sobol points for the
+      continuous part and overwrites the binary part with a one-hot combination
+      (chosen at random, deterministically from the seed)
     """
     import random
 
     import bo as bo_mod
 
     combos = build_onehot_fixed_features(ss)
-    # 起動時検証は抜き取り（≤128個・決定論）。全数（lee3=4096, ~10分）は
-    # tests/test_baseline.py の BASELINE_FULL=1 で証明済み（2026-07-12 PASS）。
+    # The start-up check is a sample (<=128 combinations, deterministic). The
+    # exhaustive check (lee3=4096, ~10 min) is proven by BASELINE_FULL=1 in
+    # tests/test_baseline.py (PASS on 2026-07-12).
     step = max(1, len(combos) // 128)
     assert_all_buildable(ss, combos[::step])
 
@@ -112,21 +123,21 @@ def patch_bo_for_onehot(ss: dict[str, Any], seed: int) -> None:
         return x
 
     bo_mod._sobol_initial = sobol_onehot
-    print(f"[baseline] BO one-hot 注入: 有効組合せ {len(combos)} 個"
-          f"（2^{len(T.binary_variables(ss))} 総当たりを回避）")
+    print(f"[baseline] BO one-hot injection: {len(combos)} valid combination(s) "
+          f"(avoiding the 2^{len(T.binary_variables(ss))} exhaustive enumeration)")
 
 
 # =========================================================
-# 実行
+# Execution
 # =========================================================
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ss", choices=["lee2", "lee3"], required=True)
     parser.add_argument("--optimizer", choices=["bo", "ga"], required=True)
-    parser.add_argument("--pilot", action="store_true", help="縮小予算での配線確認")
+    parser.add_argument("--pilot", action="store_true", help="check the plumbing on a reduced budget")
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--force", action="store_true", help="既存 run ディレクトリに追記する")
+    parser.add_argument("--force", action="store_true", help="append to an existing run directory")
     args = parser.parse_args()
 
     import run_iteration as RI
@@ -136,11 +147,11 @@ def main() -> None:
     base_dir = os.path.join(ALGO, "runs", run_name)
 
     if os.path.exists(os.path.join(base_dir, "iterations")) and not args.force:
-        raise SystemExit(f"{base_dir} には既に結果があります（上書き防止）。--force で追記。")
+        raise SystemExit(f"{base_dir} already contains results (overwrite guard). Use --force to append.")
     os.makedirs(base_dir, exist_ok=True)
     shutil.copyfile(seed_path, os.path.join(base_dir, "ss_current.json"))
 
-    # case.yaml を読み、メモリ上でのみ上書き（ファイルは不変）
+    # Read case.yaml and override in memory only (the file is left unchanged)
     case = RI.load_case()
     case["optimizer"] = args.optimizer
     if args.optimizer == "bo":
@@ -154,16 +165,16 @@ def main() -> None:
     budget = (case["bo"]["n_init"] + case["bo"]["n_iter"] * case["bo"]["q_batch"]
               if args.optimizer == "bo"
               else case["ga"]["pop_size"] * (case["ga"]["n_gen"] + 1))
-    print(f"[baseline] SS={args.ss}（バイナリ{n_bin}・連続{n_cont}）, "
-          f"optimizer={args.optimizer}, 予算≈{budget}評価, pilot={args.pilot}")
+    print(f"[baseline] SS={args.ss} ({n_bin} binary, {n_cont} continuous), "
+          f"optimizer={args.optimizer}, budget ~= {budget} evaluations, pilot={args.pilot}")
 
-    # 実行時差し替え（本スクリプト内に閉じる。src は無変更）
+    # Runtime substitution (confined to this script; src is unchanged)
     if args.optimizer == "bo":
         patch_bo_for_onehot(ss, args.seed)
     else:
         import ga_onehot
         RI.run_ga = ga_onehot.run_ga_onehot
-        print("[baseline] GA one-hot 注入: run_iteration.run_ga → ga_onehot.run_ga_onehot")
+        print("[baseline] GA one-hot injection: run_iteration.run_ga -> ga_onehot.run_ga_onehot")
 
     results = RI.run_one_iteration(base_dir, case, commit=False)
 
@@ -177,11 +188,11 @@ def main() -> None:
     }
     with open(os.path.join(base_dir, "baseline_summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
-    print(f"\n[baseline] 完了: {base_dir}")
+    print(f"\n[baseline] done: {base_dir}")
 
 
 if __name__ == "__main__":
-    # cp932 コンソール対策（apply_ss.main と同じ堅牢化）
+    # Workaround for cp932 consoles (same hardening as apply_ss.main)
     for _stream in (sys.stdout, sys.stderr):
         try:
             _stream.reconfigure(encoding="utf-8")

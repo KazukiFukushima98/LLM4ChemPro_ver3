@@ -1,13 +1,15 @@
-"""評価の抽象境界（Evaluator Protocol）と結果型定義、コスト目的関数（12.2）。
+"""Abstract evaluation boundary (Evaluator Protocol), result types, and the cost objective (12.2).
 
-ARCHITECTURE 5.2 の Evaluator Protocol と、Metrics / DetailedResult の dataclass を定義する。
-実装は simulator.AspenEvaluator が行う。将来サロゲート（FMQA/BOQA 等）に差し替える際は
-別実装を注入するだけでよい。テストはモック注入。
+Defines the Evaluator Protocol of ARCHITECTURE 5.2 together with the Metrics /
+DetailedResult dataclasses. The implementation lives in simulator.AspenEvaluator.
+Swapping in a surrogate later (FMQA/BOQA etc.) only requires injecting a different
+implementation. Tests inject mocks.
 
-コスト目的関数（ver3 12.2）:
-    Metrics + 膜面積 + case（economics/feed）から年間換算回収コスト [$/tCO2] を合成する
-    純関数 cost_per_tco2 をここに置く（Metrics のすぐ隣＝評価境界の一部として。
-    optimizer 側（ga/bo）と run_iteration の双方から同じ定義を使う）。
+Cost objective (ver3 12.2):
+    The pure function cost_per_tco2, which combines Metrics + membrane areas +
+    case (economics/feed) into an annualized capture cost [$/tCO2], lives here --
+    right next to Metrics, as part of the evaluation boundary -- so that the
+    optimizers (ga/bo) and run_iteration all use the same definition.
 """
 
 from __future__ import annotations
@@ -18,57 +20,63 @@ from typing import Any, Protocol, runtime_checkable
 
 BAD_VALUE: float = 1.0e6
 
-# economics: セクションの既定値（Lee et al., J. Membr. Sci. 563 (2018) Table 1）。
-# case.yaml の economics: で上書き可能（人間管理）。
-# 注1: 熱交換器コスト（Chx=300 $/m2）はフローシートに冷却器を持たないため**省略**
-#     （2026-07-10 ユーザ決定）。膨張機は 12.4 で実装されるまで負の WNET が現れない。
-# 注2: 圧力機器の CAPEX は **C_unit × |WNET|（電気動力そのまま・η で割らない）**。
-#     Lee Eq.16 の字面（C·W/η）どおりに電気動力を η で割ると論文の実測値
-#     （Fig.3/4 の C_cap）より系統的に +8〜10% 過大になることを4設計の再現計算で確認
-#     （2026-07-10）。Eq.16 の W/η は「等エントロピー仕事→実動力」の換算であり、
-#     Aspen の WNET は既に実動力なので追加の除算は不要。η なし＋HX 省略で
-#     論文値との差は全4設計で −2% 前後（≒省略した HX 分）に収まる。
+# Defaults for the economics: section (Lee et al., J. Membr. Sci. 563 (2018) Table 1).
+# Overridable via economics: in case.yaml (human-managed).
+# Note 1: The heat-exchanger cost (Chx=300 $/m2) was **omitted** because the flowsheet
+#     had no coolers (user decision, 2026-07-10). No negative WNET appears until the
+#     expander is implemented in 12.4.
+# Note 2: CAPEX of pressure equipment is **C_unit x |WNET| (electric power as-is, not
+#     divided by eta)**. Dividing electric power by eta as Lee Eq.16 literally reads
+#     (C.W/eta) overshoots the paper's own values (C_cap in Fig.3/4) systematically by
+#     +8 to 10%, as confirmed by reproducing all four designs (2026-07-10). The W/eta in
+#     Eq.16 converts isentropic work to actual power, and Aspen's WNET is already actual
+#     power, so no further division is needed. Without eta and with HX omitted, the gap
+#     to the published values stays around -2% for all four designs (~= the omitted HX).
 ECONOMICS_DEFAULTS: dict[str, float] = {
-    "membrane_cost": 50.0,          # $/m2（モジュール・スキッド込み）
+    "membrane_cost": 50.0,          # $/m2 (module and skid included)
     "compressor_cost": 670.0,       # $/kW
     "vacuum_pump_cost": 1341.0,     # $/kW
-    "expander_cost": 500.0,         # $/kW（12.4 で膨張機実装後に効く）
-    "hx_cost": 300.0,               # $/m2（冷却器。Lee Eq.16 C_hx。2026-07-16 組み込み）
-    "installation_factor": 1.6,     # f_in（総 CAPEX に乗算）
-    "capital_charge_rate": 0.2,     # /y（年間資本賦課率）
+    "expander_cost": 500.0,         # $/kW (takes effect once the expander lands in 12.4)
+    "hx_cost": 300.0,               # $/m2 (cooler; Lee Eq.16 C_hx; added 2026-07-16)
+    "installation_factor": 1.6,     # f_in (multiplies total CAPEX)
+    "capital_charge_rate": 0.2,     # /y (annual capital charge rate)
     "electricity_cost": 0.04,       # $/kWh
-    "operating_hours": 7446.0,      # h/y（稼働率 85%）
-    "penalty_weight": 1000.0,       # コスト目的の shortfall² 係数（Lee の r）
+    "operating_hours": 7446.0,      # h/y (85% availability)
+    "penalty_weight": 1000.0,       # shortfall^2 coefficient for the cost objective (Lee's r)
 }
 
 
 def feed_co2_t_per_h(feed: dict[str, Any]) -> float:
-    """case.yaml.feed から feed 中の CO2 質量流量 [t/h] を計算する。
+    """Compute the CO2 mass flow [t/h] in the feed from case.yaml.feed.
 
-    **TOTFLOW はモル流量 [kmol/h] として解釈する**：case.yaml は flowbase: MASS を
-    書き込むが、実機では TOTFLOW がモル流量として効くことを 2026-07-10 の smoke_feed
-    で実測確定した（totflow=2.44e6 → V0 全モル流量 2.44e6 kmol/h。ver2 run12 の記録
-    「totflow=1000 で feed CO2=150」とも整合＝ver2 時代から同挙動）。したがって
-    CO2 質量流量 = totflow[kmol/h] × co2_frac × MW_CO2 / 1000。
+    **TOTFLOW is interpreted as a molar flow [kmol/h]**: case.yaml writes flowbase: MASS,
+    but the smoke_feed run of 2026-07-10 established by measurement that TOTFLOW actually
+    acts as a molar flow (totflow=2.44e6 -> total molar flow at V0 of 2.44e6 kmol/h; this
+    is also consistent with the ver2 run12 record "totflow=1000 gives feed CO2=150", i.e.
+    the same behaviour since ver2). Hence
+    CO2 mass flow = totflow[kmol/h] x co2_frac x MW_CO2 / 1000.
 
-    ガードは「動作実績のある設定の組合せ」からの逸脱検知として維持する
-    （書き込み列を変えた場合は実機挙動が変わり得るため、この換算も再検証が必要）。
+    The guard is kept as a detector for deviations from the configuration combination that
+    is known to work (changing the written columns may change the actual behaviour, in
+    which case this conversion needs to be re-verified).
     """
     if str(feed.get("flowbase", "MASS")).upper() != "MASS" or \
        str(feed.get("basis", "MOLE-FRAC")).upper() != "MOLE-FRAC":
         raise ValueError(
-            "feed_co2_t_per_h は FLOWBASE=MASS + BASIS=MOLE-FRAC（実測: TOTFLOW=モル）"
-            f"のみ対応 (got flowbase={feed.get('flowbase')!r}, basis={feed.get('basis')!r})"
+            "feed_co2_t_per_h supports only FLOWBASE=MASS + BASIS=MOLE-FRAC "
+            "(measured: TOTFLOW is molar) "
+            f"(got flowbase={feed.get('flowbase')!r}, basis={feed.get('basis')!r})"
         )
-    x = float(feed["co2_frac"])            # CO2 モル分率
-    mw_co2 = 44.0                          # simulator の spec_e 換算（44.0）と揃える
-    return float(feed["totflow"]) * x * mw_co2 / 1000.0   # kmol/h → t/h
+    x = float(feed["co2_frac"])            # CO2 mole fraction
+    mw_co2 = 44.0                          # matches the spec_e conversion in simulator (44.0)
+    return float(feed["totflow"]) * x * mw_co2 / 1000.0   # kmol/h -> t/h
 
 
 def _pressure_unit_cost_per_kw(block_name: str, wnet: float, econ: dict[str, float]) -> float:
-    """energy_breakdown のブロック名と WNET 符号から単価 [$/kW] を引く。
+    """Look up the unit cost [$/kW] from the energy_breakdown block name and the sign of WNET.
 
-    VP{n}=真空ポンプ、WNET<0=膨張機（タービン・電力回収）、それ以外（COMP 等）=圧縮機。
+    VP{n} = vacuum pump; WNET<0 = expander (turbine, power recovery); anything else
+    (COMP etc.) = compressor.
     """
     if wnet < 0.0:
         return float(econ["expander_cost"])
@@ -82,28 +90,30 @@ def cost_per_tco2(
     membrane_areas: dict[str, float],
     case: dict[str, Any],
 ) -> float:
-    """年間換算 CO2 回収コスト [$/tCO2] を合成する（Lee 2018 Eq.15/16、HX 項込み）。
+    """Compose the annualized CO2 capture cost [$/tCO2] (Lee 2018 Eq.15/16, incl. the HX term).
 
-        cost = (capital_charge · f_in · C_TCC) / (M_CO2 · t_op) + E · Ce
-        C_TCC = Σ_memb Cm·A + Σ_blk C_unit(blk) · |WNET_blk| + Chx · A_hx
-        M_CO2 = recovery × feed CO2 質量流量 [t/h]
-        E     = 比エネルギー [kWh/tCO2]（OPEX/tCO2 = E · Ce と等価）
+        cost = (capital_charge * f_in * C_TCC) / (M_CO2 * t_op) + E * Ce
+        C_TCC = sum_memb Cm*A + sum_blk C_unit(blk) * |WNET_blk| + Chx * A_hx
+        M_CO2 = recovery x feed CO2 mass flow [t/h]
+        E     = specific energy [kWh/tCO2] (equivalent to OPEX/tCO2 = E * Ce)
 
-    WNET は電気動力そのものとして扱い η では割らない（ECONOMICS_DEFAULTS 注2。
-    Lee Fig.3/4 の4設計で論文 C_cap との一致を確認済み・差 −2% ≒ HX 省略分だった）。
-    A_hx は simulator が Lee Eq.5/6（U=132.5 W/m2K・冷却水 20→25°C・向流 LMTD）で
-    冷却器ブロックから算出して Metrics.hx_area_m2 に載せる（2026-07-16 組み込み）。
+    WNET is treated as electric power itself and is not divided by eta (ECONOMICS_DEFAULTS
+    note 2; agreement with the published C_cap was confirmed for the four designs of Lee
+    Fig.3/4, the -2% gap being the omitted HX).
+    A_hx is computed by the simulator from the cooler blocks via Lee Eq.5/6 (U=132.5 W/m2K,
+    cooling water 20->25 degC, counter-current LMTD) and carried in Metrics.hx_area_m2
+    (added 2026-07-16).
 
     Parameters
     ----------
-    metrics        : 有効な Metrics（bad は BAD_VALUE を返す）
-    membrane_areas : {unit_name: area_m2}。**具体トポロジーに存在する膜だけ**を渡す
-                     （pruned 膜の面積を CAPEX に入れない）
-    case           : case.yaml の内容（economics / feed を参照）
+    metrics        : valid Metrics (a bad one yields BAD_VALUE)
+    membrane_areas : {unit_name: area_m2}. Pass **only the membranes present in the
+                     concrete topology** (pruned membrane areas must not enter CAPEX)
+    case           : contents of case.yaml (economics / feed are read)
 
     Returns
     -------
-    float : $/tCO2。metrics が bad、または回収ゼロなら BAD_VALUE。
+    float : $/tCO2. BAD_VALUE if metrics is bad or recovery is zero.
     """
     if metrics.specific_energy >= BAD_VALUE:
         return BAD_VALUE
@@ -131,11 +141,13 @@ def membrane_areas_from_x(
     cont_vars: list[dict[str, Any]],
     topology: dict[str, Any],
 ) -> dict[str, float]:
-    """具体トポロジー次元の x から膜面積 {unit: m2} を取り出す（cost_per_tco2 用）。
+    """Extract membrane areas {unit: m2} from an x in concrete-topology dimensions (for cost_per_tco2).
 
-    x は evaluator に渡すものと同じ「具体トポロジー次元」（x_for_topology 適用後）、
-    cont_vars は continuous_variables(topology, membrane_model) と同順であること。
-    area 変数が x に無い膜（あり得ないが防御）は units.params の値にフォールバックする。
+    x must be in the same "concrete topology dimensions" as the one passed to the evaluator
+    (i.e. after x_for_topology), and cont_vars must be in the same order as
+    continuous_variables(topology, membrane_model).
+    Membranes whose area variable is absent from x (should not happen; defensive) fall back
+    to the value in units.params.
     """
     areas: dict[str, float] = {}
     for uname, udef in topology.get("units", {}).items():
@@ -152,24 +164,24 @@ def membrane_areas_from_x(
 
 @dataclass
 class Metrics:
-    """GA ループ中の fitness 計算に必要な最小指標セット（ARCHITECTURE 5.2）。"""
+    """Minimal metric set needed for fitness evaluation inside the GA loop (ARCHITECTURE 5.2)."""
 
     specific_energy: float                        # kWh/tCO2
     purity: float                                 # CO2 mol fraction [0, 1]
     recovery: float                               # CO2 recovery [0, 1]
-    energy_breakdown: dict[str, float] = field(default_factory=dict)  # block → WNET [kW]
-    hx_area_m2: float = 0.0                       # 自動冷却器の総伝熱面積 [m2]
-                                                  # （Lee Eq.5/6。2026-07-16 HX コスト組み込み）
+    energy_breakdown: dict[str, float] = field(default_factory=dict)  # block -> WNET [kW]
+    hx_area_m2: float = 0.0                       # total heat-transfer area of the auto coolers [m2]
+                                                  # (Lee Eq.5/6; HX cost added 2026-07-16)
 
     @classmethod
     def bad(cls) -> "Metrics":
-        """Aspen 非収束・クラッシュ・ビルド失敗時の番兵値を返す。"""
+        """Return the sentinel used on Aspen non-convergence, crash, or build failure."""
         return cls(specific_energy=BAD_VALUE, purity=0.0, recovery=0.0)
 
 
 @dataclass
 class DetailedResult:
-    """best 解 1 点の詳細抽出結果（results.json の元になる）。"""
+    """Detailed extraction for the single best solution (the source of results.json)."""
 
     metrics: Metrics
     stream_results: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -178,9 +190,10 @@ class DetailedResult:
 
 @runtime_checkable
 class Evaluator(Protocol):
-    """評価の抽象境界（ARCHITECTURE 5.2）。
+    """Abstract evaluation boundary (ARCHITECTURE 5.2).
 
-    GA はこの境界を通じて評価を呼び出す。topology / ga.py はこの Protocol しか見ない。
+    The GA invokes evaluation through this boundary. topology / ga.py see nothing but
+    this Protocol.
     """
 
     def evaluate_topology(
@@ -188,18 +201,18 @@ class Evaluator(Protocol):
         topology: dict[str, Any],
         x_list: list[list[float]],
     ) -> list[Metrics]:
-        """同一トポロジーを 1 回構築し、x_list を順に評価する。
+        """Build a given topology once, then evaluate x_list in order.
 
         Parameters
         ----------
-        topology : 具体トポロジー {vertices, arcs, units}
-        x_list   : 連続変数ベクトルのリスト。
-                   各 x の並び順は topology.continuous_variables(topology) が返す順に従う。
+        topology : concrete topology {vertices, arcs, units}
+        x_list   : list of continuous-variable vectors.
+                   Each x follows the order returned by topology.continuous_variables(topology).
 
         Returns
         -------
-        x_list と同じ長さの Metrics リスト。
-        Aspen 非収束・クラッシュは Metrics.bad() で吸収する。
+        A Metrics list of the same length as x_list.
+        Aspen non-convergence and crashes are absorbed as Metrics.bad().
         """
         ...
 
@@ -208,8 +221,9 @@ class Evaluator(Protocol):
         topology: dict[str, Any],
         x: list[float],
     ) -> DetailedResult:
-        """best 解 1 点の詳細抽出。stream_results（各頂点の CO₂ 情報）まで返す。
+        """Detailed extraction for the single best solution, including stream_results
+        (the CO2 information of each vertex).
 
-        ビルド・実行失敗時は DetailedResult(metrics=Metrics.bad()) を返す。
+        On build or run failure, returns DetailedResult(metrics=Metrics.bad()).
         """
         ...

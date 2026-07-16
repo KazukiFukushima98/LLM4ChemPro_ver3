@@ -1,6 +1,6 @@
-"""signals.py の単体テスト（Aspen 不要）。
+"""Unit tests for signals.py (no Aspen required).
 
-実行:
+Run:
     uv run python -m unittest algorithm.tests.test_signals
 """
 
@@ -70,8 +70,8 @@ class TestBoundsHit(unittest.TestCase):
 
     def test_middle_value_no_hit(self):
         ss = load_seed()
-        # area bounds = [100000, 1500000]; 中央付近 → 張り付かない
-        # p_perm bounds = [0.1, 0.99]; 中央 0.5 → 張り付かない
+        # area bounds = [100000, 1500000]; near the middle -> not pinned
+        # p_perm bounds = [0.1, 0.99]; middle 0.5 -> not pinned
         results = make_results(optimal_params={
             "MEMB1_area": 700000.0, "MEMB1_p_perm": 0.5,
             "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.5,
@@ -81,7 +81,7 @@ class TestBoundsHit(unittest.TestCase):
 
     def test_lower_hit_detected(self):
         ss = load_seed()
-        # p_perm の下限 0.1 に張り付き
+        # pinned at the p_perm lower bound of 0.1
         results = make_results(optimal_params={
             "MEMB1_area": 700000.0, "MEMB1_p_perm": 0.5,
             "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.1,
@@ -97,7 +97,7 @@ class TestBoundsHit(unittest.TestCase):
     def test_upper_hit_detected(self):
         ss = load_seed()
         results = make_results(optimal_params={
-            "MEMB1_area": 1490000.0, "MEMB1_p_perm": 0.5,  # 上限 1500000 に張り付き
+            "MEMB1_area": 1490000.0, "MEMB1_p_perm": 0.5,  # pinned at the upper bound of 1500000
             "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.5,
         })
         hits = S.extract_bounds_hit(results, ss)
@@ -108,10 +108,10 @@ class TestBoundsHit(unittest.TestCase):
 
     def test_bounds_override_reflected(self):
         ss = load_seed()
-        # MEMB1.area の bounds を [200000, 700000] に上書き
+        # override the bounds of MEMB1.area with [200000, 700000]
         ss["units"]["MEMB1"]["bounds_override"] = {"area": [200000.0, 700000.0]}
-        # 既定 bounds=[100000,1500000] では中央扱いの 695000 が、
-        # 上書き後 [200000, 700000] では上限張り付きになる
+        # 695000 counts as mid-range under the default bounds=[100000,1500000],
+        # but is pinned at the upper bound once overridden to [200000, 700000]
         results = make_results(optimal_params={
             "MEMB1_area": 695000.0, "MEMB1_p_perm": 0.5,
             "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.5,
@@ -125,13 +125,13 @@ class TestBoundsHit(unittest.TestCase):
 
     def test_missing_param_skipped(self):
         ss = load_seed()
-        # MEMB1_area が optimal_params に無い → skip（KeyError にならない）
+        # MEMB1_area is absent from optimal_params -> skipped (no KeyError)
         results = make_results(optimal_params={
             "MEMB1_p_perm": 0.5,
             "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.5,
         })
         hits = S.extract_bounds_hit(results, ss)
-        self.assertEqual(hits, [])  # MEMB1_area が無いだけで他は中央
+        self.assertEqual(hits, [])  # only MEMB1_area is missing; the rest are mid-range
 
 
 # =========================================================
@@ -178,7 +178,7 @@ class TestEnergyBlocks(unittest.TestCase):
 class TestResidueLosses(unittest.TestCase):
 
     def test_single_residue(self):
-        ss = load_seed()  # V8 が residue
+        ss = load_seed()  # V8 is the residue
         results = make_results(stream_results={
             "V0": {"CO2_molfrac": 0.15, "CO2_moleflow": 1.0, "description": "Feed"},
             "V8": {"CO2_molfrac": 0.05, "CO2_moleflow": 0.30, "description": "Residue"},
@@ -209,7 +209,7 @@ class TestResidueLosses(unittest.TestCase):
         ss = load_seed()
         results = make_results(stream_results={
             "V0": {"CO2_molfrac": 0.15, "CO2_moleflow": 1.0, "description": "Feed"},
-            # V8 が無い
+            # V8 is absent
         })
         losses = S.extract_residue_losses(results, ss)
         self.assertEqual(losses, [])
@@ -270,7 +270,7 @@ class TestExtractAggregator(unittest.TestCase):
             purity=0.514, recovery=0.267, spec_e=290.3,
             optimal_params={
                 "MEMB1_area": 700000.0, "MEMB1_p_perm": 0.5,
-                "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.1,  # 下限張り付き
+                "MEMB2_area": 700000.0, "MEMB2_p_perm": 0.1,  # pinned at the lower bound
             },
             energy_breakdown={"VP1": 146.0, "VP2": 364.0},      # VP2 dominant
             stream_results={
@@ -299,7 +299,7 @@ class TestExtractAggregator(unittest.TestCase):
         )
         sig = S.extract(results, ss, case)
         text = S.summarize(sig)
-        # 主要セクションが出力されているか
+        # check that the main sections are present in the output
         for marker in ["Signals", "Performance:", "Energy blocks", "Bounds-hit", "Residue CO2 loss", "Candidate status"]:
             self.assertIn(marker, text)
 

@@ -1,16 +1,18 @@
-"""SubprocessEvaluator のテスト用ダミー worker（Aspen 不要・決定的）。
+"""Dummy worker for testing SubprocessEvaluator (no Aspen, deterministic).
 
-実 aspen_worker.py と同じ stdout プロトコル（1 結果 = 1 行 JSON）を喋るが、
-Aspen には一切触れない。case["_test_behavior"] で挙動を切り替える:
+Speaks the same stdout protocol as the real aspen_worker.py (one result = one
+line of JSON) but never touches Aspen. case["_test_behavior"] selects the
+behaviour:
 
-    normal       : 全 x を canned Metrics で返す（ハッピーパス）
-    partial_hang : 前半だけ返して以降は永久 sleep（途中 wedge → 親が kill）
-    abnormal     : index 0 を返して exit(2)（異常終了 → 残りは bad）
-    full_hang    : 1 件も返さず永久 sleep（全 wedge）
+    normal       : return canned Metrics for every x (happy path)
+    partial_hang : return the first half, then sleep forever (mid-way wedge -> parent kills)
+    abnormal     : return index 0, then exit(2) (abnormal exit -> the rest are bad)
+    full_hang    : return nothing and sleep forever (full wedge)
 
-forced hang を使うのは、自然 wedge が timing 依存（COORDINATION 参照）で
-決定的にテストできないため。親は wedge でも forced hang でも「タイムアウト→kill」で
-同じに扱うので、これで機構を検証できる。
+Forced hangs are used because a natural wedge is timing-dependent (see
+COORDINATION) and cannot be tested deterministically. The parent treats a wedge
+and a forced hang identically ("timeout -> kill"), so this still exercises the
+mechanism.
 """
 
 import json

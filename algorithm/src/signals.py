@@ -1,15 +1,17 @@
-"""results.json からシグナルを抽出する純関数ライブラリ。
+"""Pure-function library that extracts signals from results.json.
 
-Aspen 非依存。run_iteration.py が表示・auto-commit に使い、外側ループの Claude
-（algorithm/CLAUDE.md = SST エージェント）が読んで構造提案の根拠にする。
+Aspen-independent. run_iteration.py uses it for display and auto-commit, and the
+outer-loop Claude (algorithm/CLAUDE.md = SST agent) reads it as the basis for
+structural proposals.
 
-責務:
-    - 連続変数の境界張り付き検出（bounds_hit）
-    - エネルギーブロックの内訳（全件 share 降順 + dominant フラグ）
-    - residue sink への CO₂ 損失
-    - 純度・回収率の目標未達量
-    - 候補アークの ON/OFF
-    - 上記をまとめた Signals dataclass を返す extract() と、表示用の summarize()
+Responsibilities:
+    - Detection of continuous variables sitting at their bounds (bounds_hit)
+    - Energy breakdown per block (all blocks, share descending + dominant flag)
+    - CO2 lost to residue sinks
+    - Shortfall against the purity / recovery targets
+    - ON/OFF state of candidate arcs
+    - extract(), which returns the above as a Signals dataclass, and summarize()
+      for display
 """
 
 from __future__ import annotations
@@ -25,29 +27,29 @@ from topology import continuous_variables  # noqa: E402
 
 
 # =========================================================
-# モジュール定数（チューニング対象ではなくシグナル抽出の目盛り）
+# Module constants (scales for signal extraction, not tuning knobs)
 # =========================================================
 
-BOUNDS_HIT_SLACK = 0.05       # bounds の lo/hi から 5% 以内で張り付き判定
-ENERGY_DOMINANT_SHARE = 0.5   # share > 0.5 で支配と定義
+BOUNDS_HIT_SLACK = 0.05       # counted as bounds-hit within 5% of the lo/hi bound
+ENERGY_DOMINANT_SHARE = 0.5   # dominance is defined as share > 0.5
 
 
 # =========================================================
-# データ型
+# Data types
 # =========================================================
 
 @dataclass
 class BoundsHit:
-    name: str          # GA 変数名（例 "MEMB1_area"）
+    name: str          # GA variable name (e.g. "MEMB1_area")
     value: float
     side: str          # "lower" or "upper"
-    limit: float       # 張り付いている側の境界値
-    slack_ratio: float  # (v - lo) / span  または (hi - v) / span。0 に近いほど張り付き
+    limit: float       # bound value on the side being hit
+    slack_ratio: float  # (v - lo) / span or (hi - v) / span; closer to 0 = tighter hit
 
 
 @dataclass
 class EnergyBlock:
-    block: str          # 例 "VP1"
+    block: str          # e.g. "VP1"
     kw: float
     share: float        # kw / sum(all kws)
     dominant: bool      # share > ENERGY_DOMINANT_SHARE
@@ -55,10 +57,10 @@ class EnergyBlock:
 
 @dataclass
 class ResidueLoss:
-    vid: str            # 例 "V8"
+    vid: str            # e.g. "V8"
     description: str    # vertices[vid].label
     co2_moleflow: float
-    share_of_feed_co2: float  # residue.moleflow / feed.moleflow（合算後の比は外で取る）
+    share_of_feed_co2: float  # residue.moleflow / feed.moleflow (summed ratio taken outside)
 
 
 @dataclass
@@ -79,7 +81,7 @@ class ConstraintViolation:
 class Signals:
     iteration: int
     specific_energy: float
-    cost_per_tco2: float | None = None   # $/tCO2（12.2。旧 results には無いので Optional）
+    cost_per_tco2: float | None = None   # $/tCO2 (12.2; Optional since old results lack it)
     bounds_hit: list[BoundsHit] = field(default_factory=list)
     energy_blocks: list[EnergyBlock] = field(default_factory=list)
     residue_losses: list[ResidueLoss] = field(default_factory=list)
@@ -88,16 +90,16 @@ class Signals:
 
 
 # =========================================================
-# 抽出（単独）
+# Extraction (individual signals)
 # =========================================================
 
 def extract_bounds_hit(
     results: dict, ss: dict, membrane_model: dict | None = None
 ) -> list[BoundsHit]:
-    """連続変数の境界張り付きを検出する。閾値 BOUNDS_HIT_SLACK。
+    """Detect continuous variables sitting at their bounds. Threshold: BOUNDS_HIT_SLACK.
 
-    bounds は continuous_variables(ss) を通すので bounds_override も自動反映される。
-    membrane_model（12.1）を渡すと permeance 変数の張り付きも検出対象になる。
+    Bounds come from continuous_variables(ss), so bounds_override is applied automatically.
+    Passing membrane_model (12.1) also brings permeance variables into scope.
     """
     opt_params: dict[str, Any] = results.get("optimal_params", {}) or {}
     hits: list[BoundsHit] = []
@@ -124,7 +126,7 @@ def extract_bounds_hit(
 
 
 def extract_energy_blocks(results: dict) -> list[EnergyBlock]:
-    """energy_breakdown を share 降順で全件返す。dominant フラグは閾値超のものに付く。"""
+    """Return the whole energy_breakdown by descending share; dominant flags those above the threshold."""
     breakdown: dict[str, float] = results.get("energy_breakdown", {}) or {}
     total = sum(breakdown.values())
     if total <= 0:
@@ -143,9 +145,10 @@ def extract_energy_blocks(results: dict) -> list[EnergyBlock]:
 
 
 def extract_residue_losses(results: dict, ss: dict) -> list[ResidueLoss]:
-    """role=residue の sink 頂点について、feed CO₂ に対する loss share を返す。
+    """Return the loss share relative to feed CO2 for each role=residue sink vertex.
 
-    feed は role=feed の頂点（通常 V0 1 個）。複数 feed なら CO₂ moleflow を合算する。
+    The feed is the role=feed vertex (normally a single V0). With multiple feeds the
+    CO2 moleflows are summed.
     """
     streams: dict[str, dict] = results.get("stream_results", {}) or {}
     vertices: dict[str, dict] = ss.get("vertices", {}) or {}
@@ -193,12 +196,12 @@ def extract_constraint_violation(results: dict, case: dict) -> ConstraintViolati
 
 
 # =========================================================
-# 集約
+# Aggregation
 # =========================================================
 
 def extract(results: dict, ss: dict, case: dict) -> Signals:
-    """results.json + ss + case から Signals を組み立てる。"""
-    # cost の番兵値（BAD_VALUE）は「測れなかった」であり値ではないので None に落とす
+    """Assemble Signals from results.json + ss + case."""
+    # The cost sentinel (BAD_VALUE) means "could not be measured", not a value, so drop it to None
     _cost = results.get("performance", {}).get("cost_usd_per_tCO2")
     _cost_valid = isinstance(_cost, (int, float)) and _cost < BAD_VALUE
     return Signals(
@@ -214,11 +217,11 @@ def extract(results: dict, ss: dict, case: dict) -> Signals:
 
 
 # =========================================================
-# 表示
+# Display
 # =========================================================
 
 def summarize(sig: Signals) -> str:
-    """Signals を人間と SST エージェントが読むためのテキストに整形する。"""
+    """Format Signals as text for human readers and the SST agent."""
     lines: list[str] = []
     lines.append(f"========== Signals (iter {sig.iteration}) ==========")
 

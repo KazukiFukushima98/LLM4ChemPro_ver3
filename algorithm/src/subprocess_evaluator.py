@@ -1,18 +1,22 @@
-"""プロセス隔離スーパーバイザ（Evaluator Protocol 実装）。
+"""Process-isolation supervisor (Evaluator Protocol implementation).
 
-run6 の wedge（server-kill しても in-flight COM 呼び出しが返らない）に対する
-保証付き最終手段。親（このクラス）は COM を一切触らず、評価グループごとに
-子プロセス aspen_worker.py を spawn する。子の中で既存 AspenEvaluator が動く。
+A guaranteed last resort against the run6 wedge (an in-flight COM call that never
+returns even after a server kill). The parent (this class) never touches COM; it
+spawns the child process aspen_worker.py per evaluation group, and the existing
+AspenEvaluator runs inside the child.
 
-階層:
-    子プロセス内 = 速い一次回復（経路①クラス：RPC 切断で返るクラッシュ → 再ビルド）
-    親プロセス   = 保証付き最終手段（返らない in-flight 詰まり → 子ごと kill）
-                   TerminateProcess は無条件なので COM の詰まり方に依存しない。
+Layers:
+    inside the child = fast first-line recovery (class-1 path: a crash that returns
+                       via RPC disconnect -> rebuild)
+    parent process   = guaranteed last resort (an in-flight stall that never
+                       returns -> kill the whole child). TerminateProcess is
+                       unconditional, so it does not depend on how COM is stuck.
 
-生存信号は「子 stdout の結果ストリーム」だけ。別スレッドの heartbeat は作らない
-（heartbeat は wedge を隠すため）。最後に結果を受け取ってからの経過が stall_sec を
-超えたら wedge とみなす。評価は run_ga 内で逐次＝子・Aspen は常に同時 1 個なので、
-taskkill /f /im AspenPlus.exe（イメージ名 kill）が安全に効く。
+The only liveness signal is the result stream on the child's stdout. No separate
+heartbeat thread is used (a heartbeat would mask a wedge). If the time since the
+last result exceeds stall_sec, it is treated as a wedge. Evaluations are sequential
+within run_ga, so there is only ever one child and one Aspen at a time, which makes
+taskkill /f /im AspenPlus.exe (kill by image name) safe.
 """
 
 from __future__ import annotations
@@ -34,12 +38,13 @@ from topology import dump_topology              # noqa: E402
 
 
 def _default_kill_aspen() -> None:
-    """AspenPlus.exe を taskkill する（タイムアウト付き）。
+    """taskkill AspenPlus.exe (with a timeout).
 
-    os.system はタイムアウトが無く、kill 不能な状態に陥った wedge Aspen で
-    呼び出し側（＝監督スレッド）ごと無制限にブロックし得る（COORDINATION: run13 の
-    85分ハングの主因＝「保証付き最終手段」自身がここで詰まった）。subprocess.run の
-    timeout で必ず戻るようにし、固まっても監督を縛らない。
+    os.system has no timeout and can block the caller (the supervising thread)
+    indefinitely against a wedged Aspen that has become unkillable (COORDINATION:
+    the main cause of the 85-minute hang in run13 -- the "guaranteed last resort"
+    itself got stuck here). The subprocess.run timeout guarantees a return, so a
+    stuck kill never ties up the supervisor.
     """
     try:
         subprocess.run(
@@ -49,11 +54,11 @@ def _default_kill_aspen() -> None:
             timeout=20,
         )
     except Exception:
-        pass  # timeout / 失敗でもブロックしない（監督を止めないことが最優先）
+        pass  # never block on a timeout / failure (keeping the supervisor alive comes first)
 
 
 class SubprocessEvaluator:
-    """各評価グループを使い捨て子プロセスで隔離評価する Evaluator。"""
+    """Evaluator that isolates each evaluation group in a disposable child process."""
 
     def __init__(
         self,
@@ -74,13 +79,17 @@ class SubprocessEvaluator:
 
         et = int(case.get("aspen_timeout_eval", 60))
         dt = int(case.get("aspen_timeout_detail", 120))
-        # 「結果無受信」の上限＝wedge と判定するまで。in-band per-x timeout（et/dt）より長くする。
-        # 下限は「ビルド＋途中の再ビルド込みの正当な無音」(~150s)＝ここを割ると健全な処理を誤 kill
-        # し、正しく走っていた評価を偽の BAD_VALUE に変えて GA/BO を汚染する。
-        # 用途で分ける：GA 中（topology）は eval(et) だけが効くので短く、最後の詳細抽出（detailed）は
-        # detail(dt) に合わせる。バッファは 120s（build/再ビルド分 ~90s ＋ 誤 wedge 回避マージン 30s。
-        # 旧値 90s は正当な無音の推定上限 ~150s と同値＝マージンゼロで、遅いビルドを誤 kill し得た）。
-        # 明示指定（stall_sec / case.subprocess_stall_sec）があれば両モードでそれを使う（テスト・手動上書き用）。
+        # Upper bound on "no result received" before declaring a wedge. Must exceed the
+        # in-band per-x timeout (et/dt). The lower bound is the legitimate silence of a
+        # build plus an intermediate rebuild (~150s): going below it falsely kills healthy
+        # work, turning correct evaluations into spurious BAD_VALUEs that pollute GA/BO.
+        # Split by use: during GA (topology) only eval(et) applies, so keep it short; the
+        # final detailed extraction (detailed) follows detail(dt). The buffer is 120s
+        # (~90s for build/rebuild plus a 30s margin against false wedges; the old 90s
+        # equalled the ~150s estimated ceiling of legitimate silence, i.e. zero margin,
+        # and could falsely kill a slow build).
+        # An explicit override (stall_sec / case.subprocess_stall_sec) applies to both
+        # modes (for tests and manual overrides).
         override = (
             stall_sec
             if stall_sec is not None
@@ -88,31 +97,32 @@ class SubprocessEvaluator:
         )
         self._stall_topology = override if override is not None else et + 120
         self._stall_detailed = override if override is not None else dt + 120
-        # テストで差し替え可能に（テスト中に実 Aspen を殺さないため必須）。
-        # 既定はタイムアウト付き（_default_kill_aspen）。詳細はその docstring 参照。
+        # Injectable for tests (essential so tests never kill a real Aspen).
+        # The default has a timeout (_default_kill_aspen); see its docstring.
         self._kill_aspen = kill_aspen or _default_kill_aspen
 
-        # 計測（2026-07-15）: 評価グループごとの実時間記録。run_iteration が results.json
-        # の timing に転記する。判定・制御には一切使わない（record-only）。
+        # Instrumentation (2026-07-15): wall-clock record per evaluation group.
+        # run_iteration copies it into the timing field of results.json. Never used
+        # for decisions or control (record-only).
         #   groups[i] = {mode, n_requested, n_results, wall_sec, wedged, rc,
-        #                eval_sec: [結果1件ごとの受信間隔秒（先頭はビルド込み）],
-        #                lost_sec: wedge/異常終了で失った秒（最後の受信→終了）}
+        #                eval_sec: [seconds between received results (the first includes the build)],
+        #                lost_sec: seconds lost to a wedge/abnormal exit (last result -> exit)}
         self.timing: dict[str, Any] = {"groups": []}
 
     # ------------------------------------------------------------------
-    # 子プロセス駆動（spawn → stream 受信 → stall 判定 → kill）
+    # Child-process driver (spawn -> receive stream -> detect stall -> kill)
     # ------------------------------------------------------------------
 
     def _run_worker(self, request: dict, n: int, stall: float) -> list[dict | None]:
-        """子を spawn し、stdout の結果ストリームを index 位置に埋める。
+        """Spawn the child and fill the stdout result stream into index positions.
 
-        stall : 結果無受信のまま wedge と判定するまでの秒数（モード別。__init__ 参照）。
-        返り値は長さ n のリスト。受信できた index は子のメッセージ dict、
-        未受信（wedge / 異常終了 / 欠落）は None。
+        stall : seconds without a result before declaring a wedge (per mode; see __init__).
+        Returns a list of length n: the child's message dict at every received index,
+        None where nothing arrived (wedge / abnormal exit / missing).
         """
         results: list[dict | None] = [None] * n
-        _t0 = time.monotonic()          # 計測: グループ全体の壁時計
-        _t_last = _t0                   # 計測: 直近の結果受信時刻（受信間隔＝評価1件の実時間）
+        _t0 = time.monotonic()          # instrumentation: wall clock for the whole group
+        _t_last = _t0                   # instrumentation: last result timestamp (gap = wall time of one evaluation)
         _eval_sec: list[float] = []
 
         with tempfile.NamedTemporaryFile(
@@ -121,10 +131,12 @@ class SubprocessEvaluator:
             json.dump(request, f)
             req_path = f.name
 
-        # stdout = 純 JSON チャネル、stderr = 子の診断（別パイプ。STDOUT にマージしない）。
-        # 子の stdio を UTF-8 に揃える：AspenEvaluator の診断には日本語が混じり、
-        # 既定 cp932 を親が strict utf-8 で読むと erdr が UnicodeDecodeError で死に、
-        # 以降のクラッシュ診断が失われる。PYTHONUTF8=1 で子を UTF-8 にし、errors="replace" を保険に。
+        # stdout = pure JSON channel, stderr = the child's diagnostics (a separate pipe,
+        # not merged into STDOUT). Force the child's stdio to UTF-8: AspenEvaluator's
+        # diagnostics contain Japanese, and if the child defaults to cp932 while the parent
+        # reads strict utf-8, erdr dies with UnicodeDecodeError and all subsequent crash
+        # diagnostics are lost. PYTHONUTF8=1 puts the child in UTF-8; errors="replace" is a
+        # safety net.
         proc = subprocess.Popen(
             [self._python, "-u", self._worker, req_path],
             stdout=subprocess.PIPE,
@@ -136,7 +148,7 @@ class SubprocessEvaluator:
         )
 
         q: queue.Queue = queue.Queue()
-        SENT = object()  # stdout が閉じた（子が結果を出し終えた / 死んだ）合図
+        SENT = object()  # signals stdout closed (the child finished emitting results / died)
         err: list[str] = []
 
         def rdr() -> None:
@@ -163,7 +175,7 @@ class SubprocessEvaluator:
                 try:
                     item = q.get(timeout=stall)
                 except queue.Empty:
-                    wedged = True  # stall 秒 無受信 → wedge
+                    wedged = True  # no result for `stall` seconds -> wedge
                     break
                 if item is SENT:
                     break
@@ -173,45 +185,50 @@ class SubprocessEvaluator:
                 try:
                     msg = json.loads(line)
                 except Exception:
-                    # stdout 上の非 JSON ノイズ（C 層やライブラリの吐き出し）は無視（防御）。
+                    # Ignore non-JSON noise on stdout (output from the C layer or
+                    # libraries) defensively.
                     continue
                 if not isinstance(msg, dict):
-                    # valid JSON だが dict でない行（数値・文字列など）。msg.get で
-                    # AttributeError になり評価ループごと巻き込むので、ノイズとして無視。
+                    # Valid JSON but not a dict (a number, a string, ...). msg.get would
+                    # raise AttributeError and take down the whole evaluation loop, so
+                    # ignore it as noise.
                     continue
                 i = msg.get("index")
                 if isinstance(i, int) and 0 <= i < n:
                     results[i] = msg
-                    _now = time.monotonic()          # 計測: 受信間隔＝この1件の実時間
+                    _now = time.monotonic()          # instrumentation: the gap is this item's wall time
                     _eval_sec.append(round(_now - _t_last, 2))
                     _t_last = _now
         finally:
-            # 強い手を先に出す（COORDINATION: 順番の罠の修正）。
-            # proc.kill() は TerminateProcess＝COM の詰まり方に依存せず必ず効く最終手段。
-            # これを最初にやると worker の in-flight COM ハンドルごと解放され、ラインは確実に
-            # 前進できる。以前は下の _kill_aspen()（タイムアウト無しの os.system）が前にあり、
-            # kill 不能な Aspen でそこが詰まると proc.kill() まで到達せず 85分ハングした。
+            # Play the strongest card first (COORDINATION: fix for the ordering trap).
+            # proc.kill() is TerminateProcess -- a last resort that always works,
+            # independent of how COM is stuck. Doing it first releases the worker's
+            # in-flight COM handles as well, so the pipeline is guaranteed to move on.
+            # Previously _kill_aspen() below (os.system, no timeout) came first, and an
+            # unkillable Aspen stalled there, never reaching proc.kill(): an 85-minute hang.
             try:
-                proc.kill()         # 子プロセス本体を無条件 kill（既に終了済みでも無害）
+                proc.kill()         # unconditionally kill the child itself (harmless if already exited)
             except Exception:
                 pass
             try:
                 proc.wait(timeout=10)
             except Exception:
                 pass
-            # worker を確実に始末した後で Aspen 本体を掃除（タイムアウト付き）。ここで取りこぼしても
-            # 次の worker のビルドが起動時に taskkill するので回収される。
+            # Clean up Aspen itself (with a timeout) only after the worker is definitely
+            # gone. Anything missed here is reclaimed by the next worker's build, which
+            # runs taskkill at startup.
             if wedged:
                 self._kill_aspen()
-            erdr_thread.join(timeout=2)  # err tail を読む前に drain 完了を待つ
+            erdr_thread.join(timeout=2)  # wait for the drain to finish before reading the err tail
             try:
                 os.remove(req_path)
             except OSError:
                 pass
 
         abnormal = proc.returncode not in (0, None)
-        # 異常終了で Aspen が残り得る場合の掃除（逐次評価＝同時 1 個なのでイメージ名 kill は安全）。
-        # wedge 時は既に kill 済みなので二重には呼ばない。
+        # Clean up when an abnormal exit may have left Aspen behind (evaluation is
+        # sequential, i.e. one at a time, so kill by image name is safe). On a wedge the
+        # kill already happened, so do not call it twice.
         if abnormal and not wedged:
             self._kill_aspen()
         if wedged or abnormal:
@@ -222,7 +239,8 @@ class SubprocessEvaluator:
                 + (f"\n    stderr tail: {''.join(err[-5:])}" if err else "")
             )
 
-        # 計測記録（record-only。wedge/異常時は「最後の受信→終了」を lost_sec に計上）
+        # Instrumentation record (record-only; on a wedge/abnormal exit, "last result ->
+        # exit" is charged to lost_sec)
         _t_end = time.monotonic()
         self.timing["groups"].append({
             "mode": request.get("mode"),
@@ -247,7 +265,7 @@ class SubprocessEvaluator:
     ) -> list[Metrics]:
         req = {
             "mode": "topology",
-            "topology": dump_topology(topology),  # タプルキー arcs → list 形式（JSON 化）
+            "topology": dump_topology(topology),  # tuple-keyed arcs -> list form (JSON-serialisable)
             "x_list": x_list,
             "case": self._case,
             "aspen_file": self._aspen_file,

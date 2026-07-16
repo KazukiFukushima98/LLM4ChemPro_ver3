@@ -1,11 +1,12 @@
-"""Aspen 実行・クラッシュ検知・タイムアウト処理 + AspenEvaluator。
+"""Aspen execution, crash detection and timeout handling + AspenEvaluator.
 
 run_aspen_with_timeout:
-    旧 LLM4ChemPro/algorithm/src/simulator.py からの忠実移植。ロジックに変更なし。
+    A faithful port from the old LLM4ChemPro/algorithm/src/simulator.py. Logic unchanged.
 
-AspenEvaluator（フェーズ4a）:
-    旧 run_iteration.py の evaluate_group / get_detailed_results から Aspen 操作部分を移植。
-    重複実装（_safe / _apply_feed）を 1 か所に集約。
+AspenEvaluator (phase 4a):
+    The Aspen-facing parts of evaluate_group / get_detailed_results in the old
+    run_iteration.py, ported here. The duplicated implementations (_safe / _apply_feed)
+    are consolidated into one place.
 """
 
 import glob
@@ -28,36 +29,41 @@ class AspenCrashError(RuntimeError):
     """Raised when Aspen crashes (detected via new .dmp file in dmp_dir)."""
 
 
-# HX（自動冷却器）面積算出の定数（Lee 2018 §2.3。2026-07-16 HX コスト組み込み）
-HX_U_W_M2K = 132.5     # 総括伝熱係数 [W/m2K]（ガス–冷却水系の文献中央値）
-HX_CW_IN_C = 20.0      # 冷却水入口 [°C]
-HX_CW_OUT_C = 25.0     # 冷却水出口 [°C]
-HX_GAS_TOUT_C = 35.0   # ガス出口 [°C]（AUTO_COOLER_TEMP_C と同値・膜運転温度）
-# QCALC の単位換算: この .apw の unit set は動力(WNET)=kW だが熱流(QCALC)=cal/s。
-# 実機検証（2026-07-16）: VP1 の QCALC/WNET = 4.1868 ちょうど＝IT カロリー係数で確定
-# （VP は断熱圧縮→35°C 全戻し冷却なので duty≈work になる物理を利用した検算）。
+# Constants for sizing the HX (automatic cooler) area (Lee 2018 section 2.3;
+# HX cost added 2026-07-16)
+HX_U_W_M2K = 132.5     # overall heat transfer coefficient [W/m2K] (literature median for gas-cooling water)
+HX_CW_IN_C = 20.0      # cooling water inlet [degC]
+HX_CW_OUT_C = 25.0     # cooling water outlet [degC]
+HX_GAS_TOUT_C = 35.0   # gas outlet [degC] (same as AUTO_COOLER_TEMP_C = membrane operating temperature)
+# QCALC unit conversion: in this .apw the unit set gives power (WNET) in kW but heat
+# flow (QCALC) in cal/s. Verified on the real model (2026-07-16): VP1's QCALC/WNET is
+# exactly 4.1868, i.e. the IT calorie factor (a cross-check exploiting the physics that
+# a VP does adiabatic compression followed by cooling all the way back to 35 degC, so
+# duty ~= work).
 QCALC_CAL_S_TO_KW = 4.1868e-3
 
 
 def hx_area_m2_from_duty(q_kw: float | None, t_in_c: float | None) -> float:
-    """冷却器1基の伝熱面積 [m2]（Lee Eq.5/6・向流 LMTD）。
+    """Heat transfer area of a single cooler [m2] (Lee Eq.5/6, counter-current LMTD).
 
-    q_kw   : 冷却器 duty [kW]（Aspen QCALC。冷却は負）
-    t_in_c : ガス入口温度 [°C]（冷却器手前の中間ストリーム温度）
+    q_kw   : cooler duty [kW] (Aspen QCALC; negative for cooling)
+    t_in_c : gas inlet temperature [degC] (temperature of the intermediate stream
+             upstream of the cooler)
 
-    冷却として成立しないケース（duty≥0＝加熱側、ガス入口が 35°C 以下、
-    冷却水出口 25°C 以下）は 0 を返す（ブロワー出口が 35°C 未満のとき等）。
+    Returns 0 for cases that are not valid cooling (duty >= 0 = heating, gas inlet at or
+    below 35 degC, cooling water outlet at or below 25 degC), e.g. when the blower
+    outlet is below 35 degC.
     """
     if q_kw is None or t_in_c is None:
         return 0.0
     if q_kw >= 0.0 or t_in_c <= HX_GAS_TOUT_C:
         return 0.0
-    dt1 = t_in_c - HX_CW_OUT_C            # 高温端: ガス入口 − 冷却水出口
-    dt2 = HX_GAS_TOUT_C - HX_CW_IN_C      # 低温端: 35 − 20 = 15
+    dt1 = t_in_c - HX_CW_OUT_C            # hot end: gas inlet - cooling water outlet
+    dt2 = HX_GAS_TOUT_C - HX_CW_IN_C      # cold end: 35 - 20 = 15
     if dt1 <= 0.0:
         return 0.0
     lmtd = dt2 if abs(dt1 - dt2) < 1e-9 else (dt1 - dt2) / math.log(dt1 / dt2)
-    return abs(q_kw) * 1000.0 / (HX_U_W_M2K * lmtd)   # kW → W
+    return abs(q_kw) * 1000.0 / (HX_U_W_M2K * lmtd)   # kW -> W
 
 
 def build_unit_params(
@@ -66,14 +72,14 @@ def build_unit_params(
     topology: dict,
     membrane_model: dict | None = None,
 ) -> dict[str, dict[str, float]]:
-    """x（具体トポロジー次元）から set_continuous_variables 用の unit_params を組み立てる。
+    """Assemble the unit_params for set_continuous_variables from x (concrete-topology dimension).
 
-    - unit 名が "*" で終わるエントリ（tie 共有 permeance の "MEMB*"）は、その
-      プレフィクスを持つトポロジー内の全ユニットへ同じ値を展開する
-    - membrane_model（12.1）が与えられていれば、permeance_CO2 を持つユニットに
-      Robeson 上界から permeance_N2 = permeance_CO2 / α を導出して追加する
+    - An entry whose unit name ends with "*" (the tie-shared permeance "MEMB*") is
+      expanded to the same value for every unit in the topology carrying that prefix
+    - If membrane_model (12.1) is given, units that have permeance_CO2 get
+      permeance_N2 = permeance_CO2 / alpha derived from the Robeson upper bound
 
-    Aspen 非依存の純関数（COM を触らないので単体テスト可能）。
+    A pure function independent of Aspen (it touches no COM, so it is unit-testable).
     """
     unit_params: dict[str, dict[str, float]] = {}
     for val, cv in zip(x, cont_vars):
@@ -95,16 +101,16 @@ def build_unit_params(
     return unit_params
 
 
-MAX_REBUILDS_PER_GROUP = 3  # 1グループ内で許す再ビルド回数の上限（無限ループ防止）
+MAX_REBUILDS_PER_GROUP = 3  # max rebuilds allowed within one group (prevents infinite loops)
 
 
 def run_aspen_with_timeout(aspen, timeout=120, dmp_dir=None):
     """Run Aspen and raise TimeoutError or AspenCrashError on failure.
 
-    ウォッチドッグ用に beat() でループ進捗を通知する。COM 呼び出しがブロックして
-    別スレッドの watchdog が Aspen を kill すると、ブロック中の呼び出しが
-    RPC 切断(-2147023xx) で例外復帰する → ここで AspenCrashError に変換し、
-    呼び出し側（evaluate_topology）の「1回再ビルド」経路に乗せる。
+    Reports loop progress to the watchdog via beat(). If a COM call blocks and the
+    watchdog thread kills Aspen, the blocked call returns as an exception from the RPC
+    disconnect (-2147023xx) -> it is converted to AspenCrashError here, feeding the
+    "rebuild once" path of the caller (evaluate_topology).
     """
     existing_dmps = set(glob.glob(os.path.join(dmp_dir, "*.dmp"))) if dmp_dir else set()
 
@@ -113,16 +119,16 @@ def run_aspen_with_timeout(aspen, timeout=120, dmp_dir=None):
         aspen.Reinit()
         aspen.Run2(1)
     except Exception as e:
-        # 実行開始そのものに失敗した場合、エンジン状態は信用できない。
-        # 「この x だけ bad で続行」ではなく AspenCrashError に変換して
-        # 呼び出し側の再ビルド経路に乗せる（壊れたエンジンでグループの残りを
-        # 全滅させないための ver2 堅牢化。ロジック本体は不変）。
+        # If starting the run itself fails, the engine state cannot be trusted.
+        # Rather than "mark just this x bad and continue", convert to AspenCrashError so
+        # the caller's rebuild path takes over (a ver2 robustness measure that keeps a
+        # broken engine from wiping out the rest of the group; the core logic is unchanged).
         raise AspenCrashError(f"Reinit/Run2 failed (engine unusable): {e}") from e
 
     start = time.time()
     try:
         while True:
-            aspen_watchdog.beat()            # 心拍（ブロックの直前に打つ）
+            aspen_watchdog.beat()            # heartbeat (emitted right before blocking)
             pythoncom.PumpWaitingMessages()
 
             if aspen.Engine.IsRunning != 1:
@@ -138,8 +144,8 @@ def run_aspen_with_timeout(aspen, timeout=120, dmp_dir=None):
                     aspen.Engine.Stop()
                 except Exception:
                     pass
-                # COORDINATION #4: Engine.Stop だけではハング時に効かないため強制 kill
-                # （タイムアウト付き。os.system は kill 不能 Aspen でここごと詰まる）
+                # COORDINATION #4: Engine.Stop alone does not work on a hang, so force a kill
+                # (with a timeout; os.system would itself get stuck here on an unkillable Aspen)
                 kill_aspen_image()
                 time.sleep(3)
                 raise TimeoutError(f"Aspen run timed out after {timeout}s")
@@ -150,30 +156,30 @@ def run_aspen_with_timeout(aspen, timeout=120, dmp_dir=None):
     except TimeoutError:
         raise
     except Exception as e:
-        # watchdog の kill / クラッシュで COM が切れた場合は RPC 切断として現れる
+        # A watchdog kill / crash that severs COM surfaces as an RPC disconnect
         if "-2147023" in str(e):
             raise AspenCrashError(f"RPC disconnect (Aspen killed/crashed): {e}")
         raise
 
 
 class AspenEvaluator:
-    """Aspen Plus を用いた具体トポロジーの評価（Evaluator Protocol 実装）。
+    """Evaluation of a concrete topology using Aspen Plus (implements the Evaluator Protocol).
 
-    移植元（旧 run_iteration.py）の重複実装を 1 か所に集約:
-      _safe       ← :179-184 (evaluate_group 内) + :306-311 (get_detailed_results 内)
-      _apply_feed ← :168-172 (_build_aspen 内)   + :294-297 (get_detailed_results 内)
+    The duplicated implementations in the source (old run_iteration.py) are consolidated here:
+      _safe       <- :179-184 (inside evaluate_group) + :306-311 (inside get_detailed_results)
+      _apply_feed <- :168-172 (inside _build_aspen)   + :294-297 (inside get_detailed_results)
 
-    evaluate_topology ← :151-239 (evaluate_group の Aspen 操作部分)
-    evaluate_detailed ← :281-356 (get_detailed_results)
+    evaluate_topology <- :151-239 (the Aspen-facing part of evaluate_group)
+    evaluate_detailed <- :281-356 (get_detailed_results)
     """
 
     def __init__(self, case: dict, aspen_file: str, dmp_dir: str) -> None:
         """
         Parameters
         ----------
-        case       : case.yaml の内容（dict）。feed / optimization_targets を含む。
-        aspen_file : Yaspen.apw の絶対パス。
-        dmp_dir    : .dmp 出力先ディレクトリ（クラッシュ検知に使う）。
+        case       : contents of case.yaml (dict). Includes feed / optimization_targets.
+        aspen_file : absolute path to Yaspen.apw.
+        dmp_dir    : directory where .dmp files are written (used for crash detection).
         """
         self._case = case
         self._aspen_file = aspen_file
@@ -184,9 +190,10 @@ class AspenEvaluator:
     # ------------------------------------------------------------------
 
     def _safe(self, aspen, path: str, default=None):
-        """Aspen ツリーから値を安全に読む。ノード不在・例外は default を返す。
+        """Safely read a value from the Aspen tree. Returns default on a missing node or exception.
 
-        旧 evaluate_group:179-184 と get_detailed_results:306-311 の重複を集約。
+        Consolidates the duplication between the old evaluate_group:179-184 and
+        get_detailed_results:306-311.
         """
         try:
             n = aspen.Tree.FindNode(path)
@@ -195,15 +202,16 @@ class AspenEvaluator:
             return default
 
     def _apply_feed(self, aspen) -> None:
-        """case.yaml.feed の仕様を V0 ストリームに書き込む（7項目・旧コードの合成を再現）。
+        """Write the case.yaml feed specification to stream V0 (7 items; reproduces the old composition).
 
-        旧コードは _configure_feed（aspen_builder.py:371-382）と evaluate_group の
-        _build_aspen（run_iteration.py:168-172）の2段階で feed を設定していた。
-        ver2 では builder に feed 既定を持たせないため（ARCHITECTURE 10節）、
-        その合成結果をここで一括設定する。
+        The old code set the feed in two stages: _configure_feed (aspen_builder.py:371-382)
+        and _build_aspen inside evaluate_group (run_iteration.py:168-172). Since ver2 gives
+        the builder no feed defaults (ARCHITECTURE section 10), the combined result is set
+        here in one place.
 
-        旧 _configure_feed が設定していた7項目のうち evaluate_group が上書きしなかった3項目
-        （BASIS / TEMP / PRES）が ver2 で抜けており BAD_VALUE の原因となっていたため追加。
+        Of the 7 items the old _configure_feed set, the 3 that evaluate_group did not
+        overwrite (BASIS / TEMP / PRES) were missing in ver2 and caused BAD_VALUE, so they
+        are added here.
         """
         feed = self._case["feed"]
         aspen.Tree.FindNode(r"\Data\Streams\V0\Input\BASIS\MIXED").value    = feed["basis"]
@@ -215,11 +223,11 @@ class AspenEvaluator:
         aspen.Tree.FindNode(r"\Data\Streams\V0\Input\FLOW\MIXED\NITRO-01").value = 1.0 - feed["co2_frac"]
 
     def _build(self, topology: dict) -> tuple:
-        """Aspen を構築して (aspen, energy_blocks) を返す。失敗時は (None, None)。
+        """Build Aspen and return (aspen, energy_blocks). Returns (None, None) on failure.
 
-        旧 _build_aspen 関数（run_iteration.py:155-173）に相当。
-        build_aspen_from_epnt は内部で taskkill 済み（aspen_builder.py:68）のため
-        事前 taskkill は不要。失敗時のみ後始末で呼ぶ。
+        Corresponds to the old _build_aspen function (run_iteration.py:155-173).
+        build_aspen_from_epnt already does a taskkill internally (aspen_builder.py:68), so
+        no taskkill is needed beforehand; it is called only to clean up after a failure.
         """
         existing_dmps = set(glob.glob(os.path.join(self._dmp_dir, "*.dmp")))
         try:
@@ -229,26 +237,28 @@ class AspenEvaluator:
                 print("    Aspen crash during build (.dmp detected)")
                 kill_aspen_image()
                 return None, None
-            self._apply_feed(aspen)   # ← try の中（COM 書き込みハングも捕捉）
+            self._apply_feed(aspen)   # <- inside the try (also catches a COM write hang)
         except Exception as e:
             print(f"    Aspen build failed: {e}")
             kill_aspen_image()
             return None, None
 
-        # energy_blocks = auto-VP 名 + 明示 COMP/EXP ユニット名
-        # （EXP＝膨張機は WNET が負＝回収電力として合計に算入される。ver3 12.4）
+        # energy_blocks = auto-VP names + explicit COMP/EXP unit names
+        # (an EXP = expander has negative WNET, i.e. it counts as recovered power in the
+        # total. ver3 12.4)
         vp_map = _auto_vps(topology)
         energy_blocks: list[str] = list(vp_map.values())
         for uname, udef in topology["units"].items():
             if udef.get("type") in ("COMP", "EXP") and uname not in energy_blocks:
                 energy_blocks.append(uname)
 
-        # coolers = 自動冷却器 (block, 入口中間ストリーム)。HX コスト（Lee Eq.5/6）の
-        # 面積算出用（2026-07-16）。builder の命名規則: VP{n}→HXV{n}/VPO{n}、
-        # COMP{n}→HXC{n}/HCI{n}。EXP は冷却器なし（膨張は温度が下がる）。
+        # coolers = automatic coolers as (block, inlet intermediate stream). Used to size
+        # the area for the HX cost (Lee Eq.5/6) (2026-07-16). Builder naming convention:
+        # VP{n}->HXV{n}/VPO{n}, COMP{n}->HXC{n}/HCI{n}. An EXP has no cooler (expansion
+        # lowers the temperature).
         coolers: list[tuple[str, str]] = []
         for vp in vp_map.values():
-            n = vp[2:]                      # "VP3" → "3"
+            n = vp[2:]                      # "VP3" -> "3"
             coolers.append((f"HXV{n}", f"VPO{n}"))
         for uname, udef in topology["units"].items():
             if udef.get("type") == "COMP":
@@ -258,7 +268,7 @@ class AspenEvaluator:
         return aspen, energy_blocks, coolers
 
     def _product_vid(self, topology: dict) -> str | None:
-        """product role の頂点IDを返す（なければ None）。"""
+        """Return the ID of the product-role vertex (None if there is none)."""
         return next(
             (v for v, d in topology["vertices"].items() if d.get("role") == "product"),
             None,
@@ -268,7 +278,7 @@ class AspenEvaluator:
         self, aspen, product_vid: str, energy_blocks: list[str],
         coolers: list[tuple[str, str]] | None = None,
     ) -> Metrics:
-        """収束済み Aspen から Metrics を抽出する。"""
+        """Extract Metrics from a converged Aspen run."""
         purity  = self._safe(aspen, rf"\Data\Streams\{product_vid}\Output\MOLEFRAC\MIXED\CARBO-01", 0.0)
         prod_mf = self._safe(aspen, rf"\Data\Streams\{product_vid}\Output\MOLEFLOW\MIXED\CARBO-01", 0.0)
         v0_mf   = self._safe(aspen, r"\Data\Streams\V0\Output\MOLEFLOW\MIXED\CARBO-01", 0.0)
@@ -281,7 +291,7 @@ class AspenEvaluator:
                 energy_bd[blk] = w
                 total_kw += w
 
-        # 自動冷却器の伝熱面積合計（Lee Eq.5/6・HX コスト用。2026-07-16）
+        # Total heat transfer area of the automatic coolers (Lee Eq.5/6, for the HX cost. 2026-07-16)
         hx_area = 0.0
         for blk, inlet in (coolers or []):
             q_cal_s = self._safe(aspen, rf"\Data\Blocks\{blk}\Output\QCALC")
@@ -294,26 +304,30 @@ class AspenEvaluator:
 
         recovery = prod_mf / v0_mf
 
-        # 質量収支ガード（COORDINATION Fix A）：リサイクル tear がヘッドレス COM 上で
-        # 「収束」と返っても、非物理な点（製品 CO2 > feed CO2 ＝回収率 > 1）に落ちることがある。
-        # 回収率 > 1 は質量収支違反なので、検算でこれを捕捉して BAD で弾く（GA がゴミ解を
-        # 最良として追うのを防ぐ）。recovery_physical_max は case.yaml で調整可（既定 1.02）。
+        # Mass-balance guard (COORDINATION Fix A): even when a recycle tear reports
+        # "converged" under headless COM, it can settle on a non-physical point
+        # (product CO2 > feed CO2, i.e. recovery > 1). A recovery > 1 violates the mass
+        # balance, so this cross-check catches it and rejects the point as BAD (keeping
+        # the GA from chasing garbage solutions as the best). recovery_physical_max is
+        # tunable in case.yaml (default 1.02).
         recovery_max = float(self._case.get("recovery_physical_max", 1.02))
         if recovery > recovery_max:
             print(
                 f"    mass-balance guard: recovery={recovery:.4f} > {recovery_max} "
-                f"(prod_mf={prod_mf:.4g}, v0_mf={v0_mf:.4g}) → BAD（非物理・質量収支違反）"
+                f"(prod_mf={prod_mf:.4g}, v0_mf={v0_mf:.4g}) -> BAD (non-physical, mass-balance violation)"
             )
             return Metrics.bad()
 
-        # エネルギー検算ガード（質量収支ガードと同型）：energy_blocks（VP/COMP）が存在する
-        # のに WNET 合計が 0 以下＝ノード読み取りの全滅（命名ずれ・未収束の取りこぼし）。
-        # このまま通すと比エネルギー 0 の「偽の完璧解」になり GA/BO が誤った最良解を追う。
-        # 物理的に正当な 0 は無い：auto-VP は必ず p_permeate(≤0.99bar)→1bar の昇圧仕事を持つ。
+        # Energy cross-check guard (same shape as the mass-balance guard): energy_blocks
+        # (VP/COMP) exist, yet the WNET total is <= 0 = every node read failed (naming
+        # mismatch, or values missed because the run did not converge).
+        # Letting this through yields a "perfect" solution with zero specific energy that
+        # the GA/BO would then chase as a false best. Zero is never physically legitimate:
+        # an auto-VP always does compression work from p_permeate (<=0.99 bar) to 1 bar.
         if energy_blocks and total_kw <= 0:
             print(
                 f"    energy guard: blocks={energy_blocks} but total WNET={total_kw:.4g} "
-                f"→ BAD（動力の読み取り全滅＝偽のゼロエネルギー解を弾く）"
+                f"-> BAD (every power reading failed = reject the false zero-energy solution)"
             )
             return Metrics.bad()
 
@@ -337,19 +351,21 @@ class AspenEvaluator:
         x_list: list[list[float]],
         on_result=None,
     ) -> list[Metrics]:
-        """1 回 Aspen を構築し x_list を順に評価する（フェーズ4a 最小形）。
+        """Build Aspen once and evaluate x_list in order (the minimal phase-4a form).
 
-        旧 evaluate_group（run_iteration.py:151-239）の Aspen 操作部分を移植。
-        クラッシュ時は 1 回リトライ（旧実装どおり）。タイムアウトは
-        case.yaml.aspen_timeout_eval（既定 60s）。
+        A port of the Aspen-facing part of the old evaluate_group (run_iteration.py:151-239).
+        On a crash it retries once (as in the old implementation). The timeout is
+        case.yaml.aspen_timeout_eval (default 60s).
 
         Parameters
         ----------
         on_result : Callable[[int, Metrics], None] | None
-            各結果が確定するたびに `(index, metrics)` で呼ぶコールバック（後方互換・既定 None）。
-            aspen_worker（子プロセス）がこれで1件ずつ stdout に流し、親（SubprocessEvaluator）が
-            「最後の受信からの経過」で stall 判定する。途中で wedge しても通過済みの x は親が保持できる。
-            すべての結果確定は emit() を経由するので、append/extend を直接書かないこと。
+            Callback invoked with `(index, metrics)` each time a result is finalized
+            (backward-compatible; default None). aspen_worker (the child process) uses it
+            to stream results one by one to stdout, and the parent (SubprocessEvaluator)
+            detects a stall from the time since the last message. Even if it wedges
+            midway, the parent keeps the x values already processed.
+            Every result is finalized through emit(), so never call append/extend directly.
         """
         with aspen_watchdog.armed():
             membrane_model = self._case.get("membrane_model")
@@ -358,13 +374,13 @@ class AspenEvaluator:
             results: list[Metrics] = []
 
             def emit(m: Metrics) -> None:
-                """結果を1件確定する。append + コールバック通知を1か所に集約。"""
+                """Finalize one result. Consolidates the append and the callback in one place."""
                 results.append(m)
                 if on_result is not None:
                     on_result(len(results) - 1, m)
 
             def emit_bad_rest() -> None:
-                """残り（未確定）の x をすべて bad で埋める。"""
+                """Fill every remaining (unfinalized) x with bad."""
                 for _ in range(len(x_list) - len(results)):
                     emit(Metrics.bad())
 
@@ -388,21 +404,22 @@ class AspenEvaluator:
                     emit(self._extract_metrics(aspen, product_vid, energy_blocks, coolers))
                     continue
                 except (AspenCrashError, TimeoutError):
-                    pass  # → 下の再ビルド処理へ
+                    pass  # -> falls through to the rebuild handling below
                 except Exception as e:
                     if "-2147023" not in str(e):
-                        # COM 切断以外の予期せぬ例外 → この x のみ bad で継続（Aspen は生存前提）
+                        # An unexpected non-COM-disconnect exception -> mark only this x bad
+                        # and continue (Aspen is assumed to still be alive)
                         print(f"    eval error (non-COM, skipped): {e}")
                         emit(Metrics.bad())
                         continue
-                    # COM 切断（kill/クラッシュ由来）→ 下の再ビルド処理へ
+                    # COM disconnect (from a kill/crash) -> falls through to the rebuild handling below
 
-                # ここに来た = クラッシュ / COM 切断。失敗 x を bad で埋め、再ビルドして次へ
+                # Reaching here = crash / COM disconnect. Mark the failed x bad, rebuild, move on
                 print(f"    Aspen crash/COM-disconnect (rebuilds={rebuilds})")
                 emit(Metrics.bad())
                 rebuilds += 1
                 if rebuilds > MAX_REBUILDS_PER_GROUP:
-                    print(f"    rebuild budget exhausted ({MAX_REBUILDS_PER_GROUP}) → グループ打ち切り")
+                    print(f"    rebuild budget exhausted ({MAX_REBUILDS_PER_GROUP}) -> aborting the group")
                     emit_bad_rest()
                     break
                 kill_aspen_image()
@@ -418,11 +435,11 @@ class AspenEvaluator:
         topology: dict,
         x: list[float],
     ) -> DetailedResult:
-        """best 解 1 点の詳細抽出。stream_results（各頂点の CO₂ 情報）まで返す。
+        """Detailed extraction for the single best solution. Also returns stream_results (CO2 data per vertex).
 
-        旧 get_detailed_results（run_iteration.py:281-356）の Aspen 操作部分を移植。
-        タイムアウトは case.yaml.aspen_timeout_detail（既定 120s）。
-        ビルド・実行失敗時は DetailedResult(metrics=Metrics.bad()) を返す。
+        A port of the Aspen-facing part of the old get_detailed_results (run_iteration.py:281-356).
+        The timeout is case.yaml.aspen_timeout_detail (default 120s).
+        On a build or run failure it returns DetailedResult(metrics=Metrics.bad()).
         """
         with aspen_watchdog.armed():
             membrane_model = self._case.get("membrane_model")
@@ -438,15 +455,17 @@ class AspenEvaluator:
             timeout_detail = int(self._case.get("aspen_timeout_detail", 120))
             try:
                 unit_params = build_unit_params(x, cont_vars, topology, membrane_model)
-                set_continuous_variables(aspen, unit_params)   # ← try の中（COM 書き込みハングも捕捉）
+                set_continuous_variables(aspen, unit_params)   # <- inside the try (also catches a COM write hang)
                 run_aspen_with_timeout(aspen, timeout=timeout_detail, dmp_dir=self._dmp_dir)
             except Exception as e:
                 print(f"    evaluate_detailed: run failed: {e}")
                 return DetailedResult(metrics=Metrics.bad())
 
-            # 旧 get_detailed_results:315-325 に相当。頂点IDで走査（n_vertices は使わない）。
-            # pressure_bar は検収用（2026-07-15）: ブロワー campaign の「全膜入口 1.1 bar」を
-            # run 後に実測圧で確認する運用のため記録する（record-only）。
+            # Corresponds to the old get_detailed_results:315-325. Iterates by vertex ID
+            # (n_vertices is not used).
+            # pressure_bar is for acceptance checking (2026-07-15): it is recorded so that
+            # the blower campaign's "all membrane inlets at 1.1 bar" can be confirmed
+            # against measured pressures after a run (record-only).
             stream_results: dict = {}
             for vid, vdef in topology["vertices"].items():
                 co2_frac = self._safe(aspen, rf"\Data\Streams\{vid}\Output\MOLEFRAC\MIXED\CARBO-01")

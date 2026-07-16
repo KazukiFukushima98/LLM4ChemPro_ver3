@@ -1,6 +1,6 @@
-"""apply_ss.py の単体テスト（Aspen 不要）。
+"""Unit tests for apply_ss.py (no Aspen required).
 
-実行:
+Run with:
     uv run python -m unittest algorithm.tests.test_apply_ss
 """
 
@@ -28,7 +28,7 @@ SEED_PATH = os.path.normpath(os.path.join(HERE, "..", "ss_seed.json"))
 
 
 def load_seed() -> dict:
-    """毎テストで新鮮な seed を読み直す。"""
+    """Re-read a fresh seed for every test."""
     return T.load_ss(SEED_PATH)
 
 
@@ -60,25 +60,26 @@ class TestAddUnit(unittest.TestCase):
             ],
         }
         new_ss = A.apply_change(ss, change)
-        # 既存頂点の max=12（ブロワー2基入り seed）→ 新規は V13, V14（permeate→retentate のポート順）
+        # The existing vertices peak at max=12 (the seed with two blowers) -> the new ones are
+        # V13, V14 (in permeate -> retentate port order)
         self.assertIn("V13", new_ss["vertices"])
         self.assertIn("V14", new_ss["vertices"])
-        # 旧直結アークは削除されている
+        # The old direct arc has been removed
         self.assertNotIn(("V2", "V11"), new_ss["arcs"])
-        # 新しいアーク4本
+        # The four new arcs
         self.assertEqual(new_ss["arcs"][("V2", "V13")],
                          {"type": "membrane_permeate", "unit": "MEMB3"})
         self.assertEqual(new_ss["arcs"][("V13", "V11")], {"type": "process"})
         self.assertEqual(new_ss["arcs"][("V2", "V14")],
                          {"type": "membrane_retentate", "unit": "MEMB3"})
         self.assertEqual(new_ss["arcs"][("V14", "V8")], {"type": "process"})
-        # units 登録
+        # Registered in units
         self.assertEqual(new_ss["units"]["MEMB3"]["inlet"], "V2")
         self.assertEqual(new_ss["units"]["MEMB3"]["outlets"],
                          {"permeate": "V13", "retentate": "V14"})
         self.assertEqual(new_ss["units"]["MEMB3"]["type"], "MEMB")
         self.assertEqual(new_ss["units"]["MEMB3"]["params"]["area"], 10000.0)
-        # validate 通る
+        # validate passes
         T.validate(new_ss)
 
     def test_add_unit_unknown_type_raises(self):
@@ -104,16 +105,17 @@ class TestAddUnit(unittest.TestCase):
         ss = load_seed()
         change = {"operations": [
             {"op": "add_unit", "unit_type": "MEMB", "unit": "MEMB3",
-             "inlet": "V2", "permeate_to": "V4", "params": {}}  # retentate_to 抜け
+             "inlet": "V2", "permeate_to": "V4", "params": {}}  # retentate_to missing
         ]}
         with self.assertRaisesRegex(ApplyError, "retentate_to"):
             A.apply_change(ss, change)
 
     def test_missing_operations_key_raises(self):
-        """operations が無い ss_change（例: 誤って "changes" キー）は空適用せず明示エラー。
+        """An ss_change without operations (e.g. a mistaken "changes" key) must raise, not apply nothing.
 
-        run24 iter_001 の実事故: エージェントが {"changes": [...]} で書き、旧実装が
-        0操作の空適用を黙って成功させた（スキーマガードの回帰テスト）。
+        A real incident in run24 iter_001: the agent wrote {"changes": [...]} and the old
+        implementation silently succeeded with an empty, zero-operation apply (regression test
+        for the schema guard).
         """
         ss = load_seed()
         with self.assertRaisesRegex(ApplyError, "operations"):
@@ -136,9 +138,9 @@ class TestAddUnit(unittest.TestCase):
             A.apply_change(ss, change)
 
     def test_add_comp_two_arcs_per_port(self):
-        """COMP も MEMB と同じ2本構成（内部 compressor + 後段 process）。
+        """COMP has the same two-arc shape as MEMB (an internal compressor plus a downstream process arc).
 
-        seed に COMP1/COMP2（ブロワー・固定）が既にいるので、追加分は COMP3 と命名する。
+        The seed already contains COMP1/COMP2 (the fixed blowers), so the added one is named COMP3.
         """
         ss = load_seed()
         change = {"operations": [
@@ -147,7 +149,7 @@ class TestAddUnit(unittest.TestCase):
              "params": {"outlet_pressure": 1.1}}
         ]}
         new_ss = A.apply_change(ss, change)
-        # 旧直結 (V2,V11) 削除、新頂点 V13 (outlet) 追加（max=12 の次）
+        # The old direct arc (V2,V11) is removed and the new vertex V13 (outlet) is added (max=12 plus one)
         self.assertNotIn(("V2", "V11"), new_ss["arcs"])
         self.assertIn("V13", new_ss["vertices"])
         self.assertEqual(new_ss["arcs"][("V2", "V13")],
@@ -157,7 +159,7 @@ class TestAddUnit(unittest.TestCase):
         T.validate(new_ss)
 
     def test_add_expander_two_arcs_per_port(self):
-        """EXP（膨張機・ver3 12.4）も COMP と同型（内部 expander + 後段 process）。"""
+        """EXP (the expander, ver3 12.4) has the same shape as COMP (an internal expander plus a downstream process arc)."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_unit", "unit_type": "EXP", "unit": "EXP1",
@@ -165,20 +167,20 @@ class TestAddUnit(unittest.TestCase):
              "params": {"outlet_pressure": 1.0}}
         ]}
         new_ss = A.apply_change(ss, change)
-        # 旧直結 (V3,V8) residue 削除、新頂点 V13 (outlet) 追加
+        # The old direct residue arc (V3,V8) is removed and the new vertex V13 (outlet) is added
         self.assertNotIn(("V3", "V8"), new_ss["arcs"])
         self.assertIn("V13", new_ss["vertices"])
         self.assertEqual(new_ss["arcs"][("V3", "V13")],
                          {"type": "expander", "unit": "EXP1"})
         self.assertEqual(new_ss["arcs"][("V13", "V8")], {"type": "process"})
         self.assertEqual(new_ss["units"]["EXP1"]["outlets"], {"outlet": "V13"})
-        # GA 変数は増えない（膨張機は変数なしの構造部品）
+        # No new GA variable (the expander is a structural component with no variables)
         names = [cv["name"] for cv in T.continuous_variables(new_ss)]
         self.assertNotIn("EXP1_pout", names)
         T.validate(new_ss)
 
     def test_add_heater_two_arcs_per_port(self):
-        """HEAT（冷却器/加熱器）も COMP と同型（内部 heater + 後段 process）・GA 変数なし。"""
+        """HEAT (cooler/heater) has the same shape as COMP (an internal heater plus a downstream process arc) and no GA variables."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_unit", "unit_type": "HEAT", "unit": "HEAT1",
@@ -191,16 +193,17 @@ class TestAddUnit(unittest.TestCase):
                          {"type": "heater", "unit": "HEAT1"})
         self.assertEqual(new_ss["arcs"][("V13", "V11")], {"type": "process"})
         names = [cv["name"] for cv in T.continuous_variables(new_ss)]
-        self.assertEqual(len(names), 4)  # 膜2基×2（COMP はブロワー固定＝変数なし、HEAT も変数なし）
+        # 2 membranes x 2 (COMP is a fixed blower = no variables, and HEAT has none either)
+        self.assertEqual(len(names), 4)
         T.validate(new_ss)
 
 
 # =========================================================
-# add_gated_unit（GA トグルとしてのユニット追加）
+# add_gated_unit (adding a unit as a GA toggle)
 # =========================================================
 
 def _gate_memb3_on_v5() -> dict:
-    """seed の MEMB2 permeate(V5)→product(V7) に MEMB3 をトグル追加する change。"""
+    """A change that toggle-adds MEMB3 on the seed's MEMB2 permeate(V5) -> product(V7) flow."""
     return {
         "reason": "gate MEMB3 on MEMB2 permeate (V5), bypass to product V7",
         "operations": [
@@ -228,27 +231,27 @@ class TestAddGatedUnit(unittest.TestCase):
     def test_expands_to_toggle_pair(self):
         ss = load_seed()
         new_ss = A.apply_change(ss, _gate_memb3_on_v5())
-        # 新インレット V13・出力 V14/V15（max=12 → V13,V14,V15）
+        # New inlet V13 and outlets V14/V15 (max=12 -> V13, V14, V15)
         self.assertIn("V13", new_ss["vertices"])
         self.assertIn("V14", new_ss["vertices"])
         self.assertIn("V15", new_ss["vertices"])
-        # 膜の内部アーク（固定・unit 所有）
+        # The membrane's internal arcs (fixed, owned by the unit)
         self.assertEqual(new_ss["arcs"][("V13", "V14")],
                          {"type": "membrane_permeate", "unit": "MEMB3"})
         self.assertEqual(new_ss["arcs"][("V13", "V15")],
                          {"type": "membrane_retentate", "unit": "MEMB3"})
-        # 後段アーク
+        # The downstream arcs
         self.assertEqual(new_ss["arcs"][("V14", "V7")], {"type": "process"})
         self.assertEqual(new_ss["arcs"][("V15", "V8")], {"type": "process"})
-        # 給餌候補（V5→V13）とバイパス候補（V5→V7）がともに candidate
+        # The feed candidate (V5->V13) and the bypass candidate (V5->V7) are both candidates
         self.assertIn("candidate", new_ss["arcs"][("V5", "V13")])
         self.assertIn("candidate", new_ss["arcs"][("V5", "V7")])
-        # 2つの候補は別ラベル（バイナリ2本）
+        # The two candidates carry distinct labels (two binaries)
         self.assertNotEqual(new_ss["arcs"][("V5", "V13")]["candidate"],
                             new_ss["arcs"][("V5", "V7")]["candidate"])
-        # バイパスは元の product 型を引き継ぐ
+        # The bypass inherits the original product type
         self.assertEqual(new_ss["arcs"][("V5", "V7")]["type"], "product")
-        # ユニット登録
+        # Unit registration
         self.assertEqual(new_ss["units"]["MEMB3"]["inlet"], "V13")
         self.assertEqual(new_ss["units"]["MEMB3"]["outlets"],
                          {"permeate": "V14", "retentate": "V15"})
@@ -256,7 +259,7 @@ class TestAddGatedUnit(unittest.TestCase):
     def test_result_validates(self):
         ss = load_seed()
         new_ss = A.apply_change(ss, _gate_memb3_on_v5())
-        T.validate(new_ss)  # 例外が出なければ OK
+        T.validate(new_ss)  # OK as long as it does not raise
 
     def test_adds_exactly_two_binaries(self):
         ss = load_seed()
@@ -265,7 +268,7 @@ class TestAddGatedUnit(unittest.TestCase):
         self.assertEqual(len(T.binary_variables(new_ss)), n_before + 2)
 
     def test_gate_off_prunes_membrane_clean(self):
-        # 給餌候補 OFF（バイパス ON）→ active_topology の pruning が MEMB3 を刈り取る
+        # Feed candidate OFF (bypass ON) -> the pruning in active_topology removes MEMB3
         ss = load_seed()
         new_ss = A.apply_change(ss, _gate_memb3_on_v5())
         q_feed = new_ss["arcs"][("V5", "V13")]["candidate"]
@@ -274,11 +277,11 @@ class TestAddGatedUnit(unittest.TestCase):
         self.assertNotIn("MEMB3", topo["units"])
         for v in ("V13", "V14", "V15"):
             self.assertNotIn(v, topo["vertices"])
-        self.assertIn(("V5", "V7"), topo["arcs"])  # バイパス経路は残る
-        self.assertIsNone(T.is_buildable(topo))    # クリーン2段
+        self.assertIn(("V5", "V7"), topo["arcs"])  # the bypass route remains
+        self.assertIsNone(T.is_buildable(topo))    # a clean two-stage structure
 
     def test_gate_on_keeps_membrane_buildable(self):
-        # 給餌候補 ON（バイパス OFF）→ MEMB3 が建つ・is_buildable OK
+        # Feed candidate ON (bypass OFF) -> MEMB3 is built and is_buildable passes
         ss = load_seed()
         new_ss = A.apply_change(ss, _gate_memb3_on_v5())
         q_feed = new_ss["arcs"][("V5", "V13")]["candidate"]
@@ -290,12 +293,12 @@ class TestAddGatedUnit(unittest.TestCase):
         self.assertIsNone(T.is_buildable(topo))
 
     def test_rejects_unit_owned_bypass(self):
-        # bypass_to が unit 所有アークの先（膜内部アーク）の場合は拒否
+        # Reject when bypass_to points past a unit-owned arc (a membrane's internal arc)
         ss = load_seed()
         change = {
             "operations": [{
                 "op": "add_gated_unit", "unit_type": "MEMB", "unit": "MEMBX",
-                "feed_from": "V4", "bypass_to": "V5",  # (V4,V5) は MEMB2 所有
+                "feed_from": "V4", "bypass_to": "V5",  # (V4,V5) is owned by MEMB2
                 "permeate_to": "V7", "retentate_to": "V8", "params": {},
             }],
         }
@@ -325,20 +328,20 @@ class TestDeleteUnit(unittest.TestCase):
         ss = load_seed()
         change = {"operations": [{"op": "delete_unit", "unit": "MEMB2"}]}
         new_ss = A.apply_change(ss, change)
-        # outlets (V5, V6) は削除
+        # The outlets (V5, V6) are deleted
         self.assertNotIn("V5", new_ss["vertices"])
         self.assertNotIn("V6", new_ss["vertices"])
-        # 関連アーク全消し
+        # Every related arc is gone
         for k in [("V4", "V5"), ("V4", "V6"), ("V5", "V7"), ("V6", "V8")]:
             self.assertNotIn(k, new_ss["arcs"])
-        # inlet V4 は孤立して削除されている
+        # The inlet V4 is now isolated and has been deleted
         self.assertNotIn("V4", new_ss["vertices"])
-        # 旧 (V12, V4)（COMP2 後段）は (V12, V8) へ振替（type=residue、unit メタは消える）
+        # The old (V12, V4) (downstream of COMP2) is rerouted to (V12, V8) (type=residue, the unit metadata is gone)
         self.assertNotIn(("V12", "V4"), new_ss["arcs"])
         self.assertEqual(new_ss["arcs"][("V12", "V8")], {"type": "residue"})
-        # units からも消える
+        # It is gone from units as well
         self.assertNotIn("MEMB2", new_ss["units"])
-        # この時点では feed→product 経路は失われる → validate は失敗するはず
+        # At this point the feed->product route is lost -> validate must fail
         with self.assertRaises(TopologyError):
             T.validate(new_ss)
 
@@ -362,15 +365,15 @@ class TestDeleteUnit(unittest.TestCase):
             {"op": "delete_unit", "unit": "MEMB2", "reroute_to": "V20"}
         ]}
         new_ss = A.apply_change(ss, change)
-        # 旧 (V12,V4) は V20 に振替されているはず（既存の V8 ではなく）
+        # The old (V12,V4) must be rerouted to V20 (not to the existing V8)
         self.assertIn(("V12", "V20"), new_ss["arcs"])
         self.assertNotIn(("V12", "V8"), new_ss["arcs"])
 
     def test_delete_then_add_as_set(self):
-        """delete + add のセット適用後、validate が通る具体例。
+        """A concrete example where validate passes after applying a delete + add set.
 
-        MEMB2 を削除（COMP2 後段 (V12,V4) が (V12,V8) residue へ振替）→ その振替アークを
-        インターセプトして MEMB3 を挿入（COMP2 の下流に膜を付け直す）。
+        Delete MEMB2 (the COMP2 downstream arc (V12,V4) is rerouted to (V12,V8) residue), then
+        intercept that rerouted arc to insert MEMB3 (reattaching a membrane downstream of COMP2).
         """
         ss = load_seed()
         change = {
@@ -384,27 +387,27 @@ class TestDeleteUnit(unittest.TestCase):
             ],
         }
         new_ss = A.apply_change(ss, change)
-        # delete 後の振替 (V12,V8) は add_unit の直結削除で消える
+        # The post-delete reroute (V12,V8) is consumed by add_unit removing the direct arc
         self.assertNotIn(("V12", "V8"), new_ss["arcs"])
-        # MEMB3 が登録され、permeate→V7, retentate→V8 の後段が張られる
+        # MEMB3 is registered, with downstream arcs permeate->V7 and retentate->V8
         self.assertIn("MEMB3", new_ss["units"])
-        # max=12 → V13, V14
+        # max=12 -> V13, V14
         self.assertEqual(new_ss["arcs"][("V13", "V7")], {"type": "process"})
         self.assertEqual(new_ss["arcs"][("V14", "V8")], {"type": "process"})
-        # validate 通る
+        # validate passes
         T.validate(new_ss)
 
 
 # =========================================================
-# Q3: delete_unit が「生きた経路」を壊さない分岐
+# Q3: the branches where delete_unit must not break a live route
 # =========================================================
 
 class TestDeleteUnitInletSharing(unittest.TestCase):
 
     def test_skips_reroute_when_inlet_shared_with_another_unit(self):
-        """Q3(2): inlet が他ユニットの inlet にもなっていたら、流入振替・inlet削除を行わない。"""
-        # V1 を MEMB1 と MEMB_GHOST の両方の inlet にする（構造としては不自然だが
-        # 所有権モデル上ありうる。Q3 ロジックの検証目的）。
+        """Q3(2): if the inlet is also the inlet of another unit, do not reroute the inflow or delete the inlet."""
+        # Make V1 the inlet of both MEMB1 and MEMB_GHOST (unnatural as a structure, but possible
+        # under the ownership model; the point is to exercise the Q3 logic).
         ss = {
             "iteration": 0,
             "vertices": {
@@ -445,25 +448,25 @@ class TestDeleteUnitInletSharing(unittest.TestCase):
         change = {"operations": [{"op": "delete_unit", "unit": "MEMB1"}]}
         new_ss = A.apply_change(ss, change)
 
-        # MEMB1 の流出側は削除
+        # The outlet side of MEMB1 is deleted
         self.assertNotIn("V2", new_ss["vertices"])
         self.assertNotIn("V3", new_ss["vertices"])
         self.assertNotIn(("V1", "V2"), new_ss["arcs"])
         self.assertNotIn(("V1", "V3"), new_ss["arcs"])
         self.assertNotIn("MEMB1", new_ss["units"])
 
-        # V1 は MEMB_GHOST の inlet のまま → 残存
+        # V1 is still the inlet of MEMB_GHOST -> it survives
         self.assertIn("V1", new_ss["vertices"])
         self.assertIn("MEMB_GHOST", new_ss["units"])
         self.assertEqual(new_ss["units"]["MEMB_GHOST"]["inlet"], "V1")
-        # 流入 (V0, V1) はそのまま（feed 型のまま）、residue へ振替されていない
+        # The inflow (V0, V1) is untouched (still of type feed) and not rerouted to the residue
         self.assertEqual(new_ss["arcs"][("V0", "V1")], {"type": "feed"})
         self.assertNotIn(("V0", "V8"), new_ss["arcs"])
 
     def test_skips_reroute_when_inlet_has_other_outgoing_arc(self):
-        """Q3(3): inlet にユニット所有外の outgoing アークがまだ残っていたら触らない。"""
+        """Q3(3): leave the inlet alone if it still has an outgoing arc not owned by the unit."""
         ss = load_seed()
-        # V1 (MEMB1 inlet) から所有外の outgoing を追加。行き先は sink。
+        # Add an unowned outgoing arc from V1 (the MEMB1 inlet), leading to a sink.
         ss["vertices"]["V20"] = {"role": "internal", "label": "bypass"}
         ss["arcs"][("V1", "V20")] = {"type": "process"}
         ss["arcs"][("V20", "V8")] = {"type": "residue"}
@@ -471,17 +474,17 @@ class TestDeleteUnitInletSharing(unittest.TestCase):
         change = {"operations": [{"op": "delete_unit", "unit": "MEMB1"}]}
         new_ss = A.apply_change(ss, change)
 
-        # MEMB1 の流出側は削除
+        # The outlet side of MEMB1 is deleted
         self.assertNotIn("V2", new_ss["vertices"])
         self.assertNotIn("V3", new_ss["vertices"])
         self.assertNotIn("MEMB1", new_ss["units"])
 
-        # V1 は所有外 outgoing が残っているので残存
+        # V1 survives because an unowned outgoing arc remains
         self.assertIn("V1", new_ss["vertices"])
-        # 流入 (V10, V1)（COMP1 後段の process）もそのまま、residue 振替なし
+        # The inflow (V10, V1) (the process arc downstream of COMP1) is untouched, with no reroute to the residue
         self.assertEqual(new_ss["arcs"][("V10", "V1")], {"type": "process"})
         self.assertNotIn(("V10", "V8"), new_ss["arcs"])
-        # 所有外 outgoing は維持
+        # The unowned outgoing arc is kept
         self.assertEqual(new_ss["arcs"][("V1", "V20")], {"type": "process"})
 
 
@@ -536,7 +539,7 @@ class TestAddArc(unittest.TestCase):
 class TestDeleteArc(unittest.TestCase):
 
     def test_delete_candidate_recycle_arc_drops_binary_variable(self):
-        """候補リサイクルアーク（unit=None, candidate=q_1）削除 → アーク消滅・binary が1つ減る。"""
+        """Deleting a candidate recycle arc (unit=None, candidate=q_1) removes the arc and one binary."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_arc", "from": "V6", "to": "V4",
@@ -554,9 +557,10 @@ class TestDeleteArc(unittest.TestCase):
         T.validate(new_ss)
 
     def test_delete_fixed_non_unit_arc(self):
-        """固定の非 unit アーク（candidate なし・unit なし）を削除 → 消える。"""
+        """Deleting a fixed non-unit arc (no candidate, no unit) removes it."""
         ss = load_seed()
-        # seed に無い固定アークを1本足してから消す（消すと seed 構造に戻り validate も通る）
+        # Add a fixed arc that is not in the seed and then remove it (removal restores the seed
+        # structure, so validate passes)
         change = {"operations": [
             {"op": "add_arc", "from": "V6", "to": "V4", "type": "recycle"},
         ]}
@@ -571,14 +575,14 @@ class TestDeleteArc(unittest.TestCase):
         T.validate(new_ss)
 
     def test_delete_unit_owned_arc_rejected(self):
-        """unit 所有アーク（膜の permeate, unit あり）を delete_arc → 拒否、アークは残る。"""
+        """delete_arc on a unit-owned arc (a membrane permeate, with a unit) is rejected and the arc stays."""
         ss = load_seed()
         change = {"operations": [
-            {"op": "delete_arc", "from": "V1", "to": "V2"},  # MEMB1 permeate
+            {"op": "delete_arc", "from": "V1", "to": "V2"},  # the MEMB1 permeate
         ]}
         with self.assertRaisesRegex(ApplyError, "owned by unit 'MEMB1'"):
             A.apply_change(ss, change)
-        # 元の ss は不変（apply_change は deepcopy なので seed 側でアーク残存を確認）
+        # The original ss is unchanged (apply_change deepcopies, so check the arc still exists on the seed side)
         self.assertIn(("V1", "V2"), ss["arcs"])
 
     def test_delete_nonexistent_arc_raises(self):
@@ -590,11 +594,11 @@ class TestDeleteArc(unittest.TestCase):
             A.apply_change(ss, change)
 
     def test_delete_arc_creating_dead_end_rejected(self):
-        """削除で下流ユニットの給餌が消えるケース → delete_arc 自体がゾンビガードで拒否。
+        """A deletion that would cut the feed to a downstream unit is rejected by delete_arc's own zombie guard.
 
-        (V12,V4) は MEMB2 inlet V4 への唯一の給餌。旧実装は delete_arc を通して
-        validate（検査項目8）が後段で弾いていたが、現在は op レベルで
-        「zombie unit 化するので delete_unit を使え」と即座に拒否する（検出の前倒し）。
+        (V12,V4) is the only feed into the MEMB2 inlet V4. The old implementation let delete_arc
+        through and validate (check 8) caught it later; now the op itself rejects it immediately
+        with "this would create a zombie unit; use delete_unit" (detection moved earlier).
         """
         ss = load_seed()
         change = {"operations": [
@@ -602,7 +606,7 @@ class TestDeleteArc(unittest.TestCase):
         ]}
         with self.assertRaisesRegex(ApplyError, "zombie unit"):
             A.apply_change(ss, change)
-        # 元の ss は不変
+        # The original ss is unchanged
         self.assertIn(("V12", "V4"), ss["arcs"])
 
 
@@ -654,23 +658,23 @@ class TestSetBounds(unittest.TestCase):
         self.assertEqual(area_var["bounds"], [200.0, 100000.0])
 
     def test_bounds_override_equal_lo_hi_fixes_param(self):
-        """lo==hi の bounds_override は GA 変数から除外＝固定パラメータ（2026-07-15）。
+        """A bounds_override with lo==hi is excluded from the GA variables, i.e. the parameter is fixed (2026-07-15).
 
-        run26 の「feed 昇圧なし（pout=1.1 bar 固定）」で使う。値は params 側が担う。
+        Used by run26's "no feed compression (pout fixed at 1.1 bar)". The value itself lives in params.
         """
         ss = load_seed()
         ss["units"]["COMP1"]["bounds_override"] = {"outlet_pressure": [1.1, 1.1]}
         ss["units"]["COMP1"]["params"]["outlet_pressure"] = 1.1
         gv = UR.make_ga_variables("COMP1", ss["units"]["COMP1"])
-        self.assertEqual(gv, [])  # COMP1_pout が消える
-        # SS 全体でも COMP1_pout が変数に現れない（膜の変数は不変）
+        self.assertEqual(gv, [])  # COMP1_pout disappears
+        # COMP1_pout does not appear among the variables of the whole SS either (the membrane variables are unchanged)
         names = [cv["name"] for cv in T.continuous_variables(ss)]
         self.assertNotIn("COMP1_pout", names)
         self.assertIn("MEMB1_area", names)
 
     def test_fixed_param_autofill_and_no_ga_variable(self):
-        """registry で lo==hi のパラメータ（ブロワー campaign の COMP）は
-        params 省略で固定値が自動補完され、GA 変数にもならない。"""
+        """For a parameter with lo==hi in the registry (the COMP of the blower campaign), omitting it
+        from params autofills the fixed value, and it does not become a GA variable either."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_unit", "unit_type": "COMP", "unit": "COMP3",
@@ -682,25 +686,25 @@ class TestSetBounds(unittest.TestCase):
         self.assertNotIn("COMP3_pout", names)
 
     def test_fixed_param_wrong_value_rejected(self):
-        """固定パラメータに別の値を書く提案は拒否（campaign 定義のすり抜け防止）。"""
+        """A proposal that writes a different value into a fixed parameter is rejected (so the campaign definition cannot be circumvented)."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_unit", "unit_type": "COMP", "unit": "COMP3",
              "inlet": "V2", "outlet_to": "V11",
              "params": {"outlet_pressure": 3.0}}
         ]}
-        with self.assertRaisesRegex(ApplyError, "固定値"):
+        with self.assertRaisesRegex(ApplyError, "fixed value"):
             A.apply_change(ss, change)
 
     def test_fixed_param_gated_unit_also_guarded(self):
-        """add_gated_unit 経由でも固定パラメータガードが効く。"""
+        """The fixed-parameter guard applies through add_gated_unit as well."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_gated_unit", "unit_type": "COMP", "unit": "COMP3",
              "feed_from": "V5", "bypass_to": "V7", "outlet_to": "V7",
              "params": {"outlet_pressure": 2.0}}
         ]}
-        with self.assertRaisesRegex(ApplyError, "固定値"):
+        with self.assertRaisesRegex(ApplyError, "fixed value"):
             A.apply_change(ss, change)
 
     def test_set_bounds_unknown_unit_raises(self):
@@ -767,7 +771,7 @@ class TestApplyChangeMeta(unittest.TestCase):
 
 
 # =========================================================
-# apply_from_files: 退避 + validate 失敗時のロールバック
+# apply_from_files: the saved copy, and rollback when validate fails
 # =========================================================
 
 class TestApplyFromFiles(unittest.TestCase):
@@ -799,19 +803,19 @@ class TestApplyFromFiles(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base, ss_path = self._setup_run(td, change)
             new_ss = A.apply_from_files(base, iter_num=1)
-            # ss_current.json は更新される
+            # ss_current.json is updated
             saved = T.load_ss(ss_path)
             self.assertEqual(saved["iteration"], 1)
             self.assertEqual(saved["arcs"][("V6", "V4")]["candidate"], "q_1")
-            # ss_before_change.json が退避されている
+            # ss_before_change.json has been saved
             backup = os.path.join(base, "iterations/iter_001/ss_before_change.json")
             self.assertTrue(os.path.exists(backup))
             backup_ss = T.load_ss(backup)
             self.assertEqual(backup_ss["iteration"], 0)
 
     def test_validate_failure_does_not_overwrite_ss_current(self):
-        """delete_unit MEMB1 単体は feed→product を壊すので validate 失敗。
-        ss_current.json は更新されないことを確認（ARCH 6.2.1）。"""
+        """delete_unit MEMB1 on its own breaks the feed->product route, so validate fails.
+        Confirm that ss_current.json is not updated (ARCH 6.2.1)."""
         change = {
             "reason": "destructive delete (should fail)",
             "operations": [{"op": "delete_unit", "unit": "MEMB1"}],
@@ -823,16 +827,16 @@ class TestApplyFromFiles(unittest.TestCase):
             with self.assertRaises(TopologyError):
                 A.apply_from_files(base, iter_num=1)
 
-            # ss_current.json は変わっていない
+            # ss_current.json is unchanged
             after = T.load_ss(ss_path)
             self.assertEqual(after, seed_before)
-            # 退避ファイルは作られている（rollback の起点になる）
+            # The saved copy is created (it is the starting point for a rollback)
             backup = os.path.join(base, "iterations/iter_001/ss_before_change.json")
             self.assertTrue(os.path.exists(backup))
 
     def test_get_latest_iter_num(self):
         with tempfile.TemporaryDirectory() as td:
-            # iter_001 と iter_003 に ss_change.json、iter_002 にはなし
+            # ss_change.json in iter_001 and iter_003, none in iter_002
             for n in (1, 3):
                 d = os.path.join(td, f"iterations/iter_{n:03d}")
                 os.makedirs(d)
@@ -846,9 +850,10 @@ class TestApplyFromFiles(unittest.TestCase):
             self.assertIsNone(A.get_latest_iter_num(td))
 
     def test_reapply_same_iter_rejected_and_backup_preserved(self):
-        """同一 iter への2回目の apply は拒否され、ロールバック起点（退避）は無傷。
+        """A second apply to the same iter is rejected, and the rollback point (the saved copy) is left intact.
 
-        無条件上書きだとリトライ1回で「変更前 SS」が適用後の状態に化けて失われる。
+        With unconditional overwriting, a single retry would turn the "SS before the change" into
+        the post-change state and lose it.
         """
         change = {
             "reason": "widen MEMB1 area bounds",
@@ -865,26 +870,26 @@ class TestApplyFromFiles(unittest.TestCase):
             self.assertEqual(T.load_ss(ss_path)["iteration"], 1)
             self.assertEqual(T.load_ss(backup)["iteration"], 0)
 
-            # 2回目（force なし）→ 拒否。退避は iteration=0 のまま無傷
+            # Second time (without force) -> rejected. The saved copy stays intact at iteration=0
             with self.assertRaisesRegex(ApplyError, "--force"):
                 A.apply_from_files(base, iter_num=1)
             self.assertEqual(T.load_ss(backup)["iteration"], 0)
             self.assertEqual(T.load_ss(ss_path)["iteration"], 1)
 
-            # --force なら意図的な再適用を許す（退避は上書きされる）
+            # With --force a deliberate re-apply is allowed (the saved copy is overwritten)
             A.apply_from_files(base, iter_num=1, force=True)
             self.assertEqual(T.load_ss(ss_path)["iteration"], 2)
             self.assertEqual(T.load_ss(backup)["iteration"], 1)
 
 
 # =========================================================
-# 安全ガード（強化分）: add_unit / add_gated_unit / add_arc
+# Safety guards (hardening): add_unit / add_gated_unit / add_arc
 # =========================================================
 
 class TestStructureGuards(unittest.TestCase):
 
     def test_add_unit_on_owned_direct_arc_rejected(self):
-        """直結 (V4,V5) は MEMB2 所有アーク。add_unit が黙って壊すのを拒否する。"""
+        """The direct arc (V4,V5) is owned by MEMB2. Reject add_unit rather than let it silently break it."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_unit", "unit_type": "COMP", "unit": "COMP9",
@@ -892,10 +897,10 @@ class TestStructureGuards(unittest.TestCase):
         ]}
         with self.assertRaisesRegex(ApplyError, "owned by unit 'MEMB2'"):
             A.apply_change(ss, change)
-        self.assertIn(("V4", "V5"), ss["arcs"])  # 元 SS は不変
+        self.assertIn(("V4", "V5"), ss["arcs"])  # the original SS is unchanged
 
     def test_add_unit_on_candidate_direct_arc_rejected(self):
-        """直結が候補アークの場合、バイナリ変数が黙って消えるので拒否する。"""
+        """When the direct arc is a candidate, reject: a binary variable would silently disappear."""
         ss = load_seed()
         ss["arcs"][("V2", "V11")]["candidate"] = "q_1"
         change = {"operations": [
@@ -906,7 +911,7 @@ class TestStructureGuards(unittest.TestCase):
             A.apply_change(ss, change)
 
     def test_add_gated_unit_on_candidate_bypass_rejected(self):
-        """バイパス先が既に候補 → 既存 q ラベルの暗黙消滅になるので拒否する。"""
+        """The bypass target is already a candidate -> reject, since the existing q label would vanish implicitly."""
         ss = load_seed()
         ss["arcs"][("V5", "V7")]["candidate"] = "q_1"
         change = {"operations": [
@@ -918,7 +923,7 @@ class TestStructureGuards(unittest.TestCase):
             A.apply_change(ss, change)
 
     def test_add_arc_with_unit_field_rejected(self):
-        """所有アークは add_unit 系だけが張る。誤タグの入口を塞ぐ。"""
+        """Only the add_unit family may create owned arcs. Close the door on mis-tagging."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_arc", "from": "V6", "to": "V4",
@@ -937,13 +942,13 @@ class TestStructureGuards(unittest.TestCase):
 
 
 # =========================================================
-# ID 採番: apply 経由でも削除済みIDを再利用しない（ARCH 3.1）
+# ID allocation: deleted IDs are not reused through apply either (ARCH 3.1)
 # =========================================================
 
 class TestIdNoReuseThroughApply(unittest.TestCase):
 
     def test_delete_max_unit_then_add_gets_fresh_ids(self):
-        """MEMB3 追加（V13,V14 払い出し）→ 削除 → MEMB4 追加は V15,V16 を得る。"""
+        """Add MEMB3 (allocating V13, V14) -> delete it -> adding MEMB4 gets V15, V16."""
         ss = load_seed()
         add3 = {"operations": [
             {"op": "add_unit", "unit_type": "MEMB", "unit": "MEMB3",
@@ -965,7 +970,7 @@ class TestIdNoReuseThroughApply(unittest.TestCase):
              "params": {}}
         ]}
         ss3 = A.apply_change(ss2, add4)
-        # V13/V14 は永久欠番（旧実装はここで V13/V14 を別の流れに再割当していた）
+        # V13/V14 are retired for good (the old implementation reassigned them to a different flow here)
         self.assertEqual(ss3["units"]["MEMB4"]["outlets"],
                          {"permeate": "V15", "retentate": "V16"})
 

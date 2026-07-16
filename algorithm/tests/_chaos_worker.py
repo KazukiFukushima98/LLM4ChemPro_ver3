@@ -1,23 +1,26 @@
-"""障害注入（chaos）ワーカー：SubprocessEvaluator の耐久テスト用。
+"""Fault-injection (chaos) worker for soak-testing SubprocessEvaluator.
 
-aspen_worker.py と同じプロトコル（req.json → stdout に 1結果=1行 JSON）を話すが、
-評価の代わりに「現実の Aspen ワーカーが起こし得る故障」を決定論的に再現する。
+Speaks the same protocol as aspen_worker.py (req.json -> one result = one line
+of JSON on stdout), but instead of evaluating anything it deterministically
+reproduces the failures a real Aspen worker can exhibit.
 
-故障の選択は behavior_for(x_list, seed) で決まる：入力とシードのハッシュから
-決定するので、テスト側（親）が同じ関数で「このグループはどう壊れるはずか」を
-予言でき、単なる完走確認ではなく挙動ごとのオラクル検証ができる。
+The failure is selected by behavior_for(x_list, seed): it is derived from a hash
+of the input and the seed, so the test (the parent) can predict how a given
+group is supposed to break using the same function. That turns the test into a
+per-behaviour oracle check rather than a mere "it ran to completion" check.
 
 behaviors:
-    normal         : 全件を canned metrics で正常返答
-    slow           : 1件ごとに小さな sleep を挟んで返答（遅いが健全 → 誤 wedge しないこと）
-    garbage        : 正常返答の合間に stdout へゴミ（非JSON・非dictのJSON・不正index）を混ぜる
-    crash          : 先頭1件だけ返して exit 3（異常終了）
-    silent_exit    : 何も出力せず exit 0（正常コードでの沈黙）
-    partial_hang   : 前半だけ返して永久スリープ（in-flight wedge）
-    hang_no_output : 一切出力せず永久スリープ（build 中 wedge 相当）
+    normal         : respond normally with canned metrics for every item
+    slow           : respond with a short sleep between items (slow but healthy -> must not be misread as a wedge)
+    garbage        : interleave junk on stdout (non-JSON, non-dict JSON, invalid index) between valid responses
+    crash          : return only the first item, then exit 3 (abnormal exit)
+    silent_exit    : output nothing and exit 0 (silence with a success code)
+    partial_hang   : return the first half, then sleep forever (in-flight wedge)
+    hang_no_output : output nothing at all and sleep forever (equivalent to a wedge during build)
 
-pid_dir（case["_chaos"]["pid_dir"]）に自 PID を書き出す。テスト終了後、
-親がこの PID 一覧と tasklist を突き合わせて「ゾンビが残っていない」ことを検証する。
+Writes its own PID into pid_dir (case["_chaos"]["pid_dir"]). After the test, the
+parent cross-checks this list of PIDs against tasklist to verify that no zombie
+process is left behind.
 """
 
 from __future__ import annotations
@@ -42,14 +45,16 @@ BEHAVIORS: list[tuple[str, int]] = [
 CANNED = {"specific_energy": 100.0, "purity": 0.9, "recovery": 0.8,
           "energy_breakdown": {}}
 
-# 「永久」スリープ。親の stall 判定（数秒）より十分長ければよい。
+# "Forever" sleep. It only needs to be well beyond the parent's stall threshold
+# (a few seconds).
 _HANG_SEC = 600
 
 
 def behavior_for(x_list: list, seed: int) -> str:
-    """入力とシードから故障モードを決定論的に選ぶ（親テストと共有するオラクル）。
+    """Deterministically pick a failure mode from the input and the seed (the oracle shared with the parent test).
 
-    x_list は JSON 往復しても同値になる float のみを想定（json.dumps が安定）。
+    x_list is assumed to hold only floats that survive a JSON round trip
+    unchanged (so json.dumps is stable).
     """
     digest = hashlib.sha256(
         json.dumps([seed, x_list], sort_keys=True).encode("utf-8")
@@ -60,7 +65,7 @@ def behavior_for(x_list: list, seed: int) -> str:
         acc += w
         if r < acc:
             return name
-    return "normal"  # 到達しない
+    return "normal"  # unreachable
 
 
 def _emit(out, index: int, extra: dict | None = None) -> None:
@@ -71,16 +76,16 @@ def _emit(out, index: int, extra: dict | None = None) -> None:
 
 
 def _emit_garbage(out) -> None:
-    """親の受信ループが耐えるべき stdout 上のゴミを一通り吐く。"""
+    """Emit the full range of stdout junk the parent's receive loop must tolerate."""
     for line in (
         "plain text noise from some C library",
-        "123",                         # 有効な JSON だが dict でない（数値）
-        '"just a string"',             # 同（文字列）
-        "[1, 2, 3]",                   # 同（リスト）
-        '{"no_index": true}',          # dict だが index なし
-        '{"index": 9999, "metrics": {}}',  # 範囲外 index
-        "",                            # 空行
-        "{broken json",                # 壊れた JSON
+        "123",                         # valid JSON but not a dict (number)
+        '"just a string"',             # ditto (string)
+        "[1, 2, 3]",                   # ditto (list)
+        '{"no_index": true}',          # a dict, but with no index
+        '{"index": 9999, "metrics": {}}',  # index out of range
+        "",                            # empty line
+        "{broken json",                # malformed JSON
     ):
         print(line, file=out, flush=True)
 
@@ -98,7 +103,7 @@ def main() -> None:
         with open(os.path.join(pid_dir, f"{os.getpid()}.pid"), "w") as f:
             f.write(str(os.getpid()))
 
-    # detailed モードは x 1点をリスト化して同じオラクルに乗せる
+    # in detailed mode, wrap the single x in a list so it goes through the same oracle
     if req["mode"] == "detailed":
         x_list = [req["x"]]
         detailed = True
@@ -119,7 +124,7 @@ def main() -> None:
             emit(i)
     elif behavior == "slow":
         for i in range(n):
-            time.sleep(0.3)  # stall_sec より十分短い「健全な遅さ」
+            time.sleep(0.3)  # "healthy slowness": comfortably shorter than stall_sec
             emit(i)
     elif behavior == "garbage":
         for i in range(n):

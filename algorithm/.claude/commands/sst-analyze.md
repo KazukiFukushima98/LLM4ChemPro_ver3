@@ -1,12 +1,12 @@
 ---
-description: 最新の results.json を分析し、次の ss_change.json を提案して書く（apply/run はしない）
-argument-hint: <run dir, 例: runs/run24>
+description: Analyse the latest results.json and propose/write the next ss_change.json (does not apply or run)
+argument-hint: <run dir, e.g. runs/run24>
 ---
-あなたは SST エージェント（`CLAUDE.md`＝この algorithm ディレクトリの指示書）として振る舞う。提案だけ行い、適用・実行はしない。**セッションは `algorithm/` で開かれている前提**（run データは `runs/`）。
+Act as the SST agent (`CLAUDE.md`, the instructions for this algorithm directory). Only make a proposal; do not apply or execute it. **Assume the session was opened in `algorithm/`** (run data lives in `runs/`).
 
-**引数の解釈**：`$ARGUMENTS` の1個目の空白区切りトークンを**対象 run ディレクトリ**（以降 **RUN**）とする。`$1` の位置指定は 0/1 始まりが環境で揺れるため使わない。空ならどの run か尋ねる。
+**Interpreting the arguments**: take the first whitespace-separated token of `$ARGUMENTS` as the **target run directory** (referred to as **RUN** below). Do not use the positional `$1`, because whether it is 0- or 1-based varies between environments. If it is empty, ask which run to use.
 
-1. `RUN/iterations/` で `results.json` を持つ最大番号の `iter_MMM/` を最新とし、その `results.json` を読む（番号を M とする。`results.json` を持たない dir は飛ばす）。
-2. `CLAUDE.md` の「シグナル → 構造提案」に従ってシグナルを抽出する（境界張り付き／エネルギー支配／残渣の CO₂ ロス／不活性候補／制約違反）。**読み取った具体数値を必ず示す。**
-3. 「削除＋追加のセット」の `ss_change.json` を組み立て `RUN/iterations/iter_MMM/ss_change.json` に書く。`reason` に根拠の数値を引用。リサイクルを足す場合は戻す残渣の CO₂ 流量を確認。バイナリ候補数が `case.yaml.max_binary_variables` 内かを自己点検する（総数上限は撤廃済み）。
-4. **`apply_ss.py` / `run_iteration.py` は実行しない。** 提案内容と根拠を報告して停止（人間が中身を確認するためのモード）。
+1. In `RUN/iterations/`, treat the highest-numbered `iter_MMM/` that has a `results.json` as the latest and read that `results.json` (call the number M; skip directories without a `results.json`).
+2. Extract the signals following "Signals -> structural proposals" in `CLAUDE.md` (variables pinned at a bound / energy domination / CO2 loss in the retentate / inactive candidates / constraint violations). **Always quote the concrete numbers you read.**
+3. Assemble an `ss_change.json` as a "deletion + addition set" and write it to `RUN/iterations/iter_MMM/ss_change.json`. Quote the supporting numbers in `reason`. If you add a recycle, check the CO2 flow of the retentate you send back. Check for yourself that the number of binary candidates stays within `case.yaml.max_binary_variables` (the cap on the total has been removed).
+4. **Do not run `apply_ss.py` or `run_iteration.py`.** Report the proposal and its rationale, then stop (this mode exists so a human can inspect the content).

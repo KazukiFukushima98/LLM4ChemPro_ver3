@@ -1,12 +1,14 @@
-"""SubprocessEvaluator のプロセス隔離・配線の単体テスト（Aspen 不要・決定的）。
+"""Unit tests for the process isolation and wiring of SubprocessEvaluator (no Aspen, deterministic).
 
-ダミー worker（_dummy_worker.py）を注入し、spawn / 結果ストリーム / stall 検知 /
-kill / bad 埋め / 部分結果の保全を実機なしで検証する。
+Injects a dummy worker (_dummy_worker.py) to exercise spawn, the result stream,
+stall detection, kill, bad-filling and the preservation of partial results,
+without the real thing.
 
-自然 wedge は timing 依存（COORDINATION 参照）なので forced hang を使う。
-親は wedge でも forced hang でも「タイムアウト→kill」で同じに扱うため、これで十分。
+A natural wedge is timing-dependent (see COORDINATION), so a forced hang is used
+instead. The parent treats a wedge and a forced hang identically ("timeout ->
+kill"), so this is sufficient.
 
-実行:
+Run:
     uv run python -m unittest algorithm.tests.test_subprocess_evaluator
 """
 
@@ -25,7 +27,7 @@ from subprocess_evaluator import SubprocessEvaluator  # noqa: E402
 
 DUMMY_WORKER = os.path.join(HERE, "_dummy_worker.py")
 
-# ダミー worker は topology を一切見ない（x_list の長さだけ使う）。最小の有効トポロジー。
+# The dummy worker never looks at the topology (it only uses the length of x_list). A minimal valid topology.
 TOPO = {"vertices": {"V0": {"role": "feed"}}, "arcs": {}, "units": {}}
 
 
@@ -38,7 +40,7 @@ def _is_canned(m: Metrics) -> bool:
 
 
 class _KillRecorder:
-    """kill_aspen 注入用。呼び出し回数を数える（実 Aspen は殺さない）。"""
+    """For injecting kill_aspen. Counts the calls (never kills real Aspen)."""
 
     def __init__(self) -> None:
         self.calls = 0
@@ -54,15 +56,15 @@ def _make_evaluator(behavior: str, kill_rec: _KillRecorder) -> SubprocessEvaluat
         aspen_file="<unused>",
         dmp_dir="<unused>",
         worker_script=DUMMY_WORKER,
-        stall_sec=5.0,          # forced hang を検知。初回 spawn jitter（AV スキャン等）は Windows で
-                                # 数秒に及ぶことがあり、3.0 だと正常系が誤 wedge でフレークし得る
-        kill_aspen=kill_rec,    # 実 Aspen を殺さないレコーダー
+        stall_sec=5.0,          # detects a forced hang. First-spawn jitter (AV scanning etc.) can reach
+                                # several seconds on Windows; at 3.0 the happy path could flake as a false wedge
+        kill_aspen=kill_rec,    # a recorder that does not kill real Aspen
     )
 
 
 class TestSubprocessEvaluatorTopology(unittest.TestCase):
     def test_normal_all_canned(self):
-        """ハッピーパス：全件 canned、kill は呼ばれない。"""
+        """Happy path: every item is canned and kill is never called."""
         rec = _KillRecorder()
         ev = _make_evaluator("normal", rec)
         out = ev.evaluate_topology(TOPO, [[0.0]] * 4)
@@ -71,15 +73,17 @@ class TestSubprocessEvaluatorTopology(unittest.TestCase):
         self.assertEqual(rec.calls, 0)
 
     def test_partial_hang_preserves_received(self):
-        """途中 wedge：前半は保持（canned）、後半は bad、kill が呼ばれる。
+        """Mid-way wedge: the first half is preserved (canned), the second half is bad, and kill is called.
 
-        逐次返しの肝＝通過済みの x が道連れにならないことの検証。n=4 で前半 2 件。
+        This is the crux of streaming results back: the x values already
+        completed must not be dragged down with the wedge. With n=4 the first
+        half is 2 items.
         """
         rec = _KillRecorder()
         ev = _make_evaluator("partial_hang", rec)
         out = ev.evaluate_topology(TOPO, [[0.0]] * 4)
         self.assertEqual(len(out), 4)
-        # 前半 n//2 = 2 件は受信済み（保持）、後半 2 件は未受信 → bad
+        # the first n//2 = 2 items were received (preserved); the last 2 were not -> bad
         self.assertTrue(_is_canned(out[0]))
         self.assertTrue(_is_canned(out[1]))
         self.assertTrue(_is_bad(out[2]))
@@ -87,7 +91,7 @@ class TestSubprocessEvaluatorTopology(unittest.TestCase):
         self.assertGreaterEqual(rec.calls, 1)
 
     def test_abnormal_exit_fills_bad(self):
-        """異常終了（exit 2）：index0 は受信済み、残りは bad。掃除 kill が 1 回。"""
+        """Abnormal exit (exit 2): index 0 was received, the rest are bad. One cleanup kill."""
         rec = _KillRecorder()
         ev = _make_evaluator("abnormal", rec)
         out = ev.evaluate_topology(TOPO, [[0.0]] * 3)
@@ -95,11 +99,11 @@ class TestSubprocessEvaluatorTopology(unittest.TestCase):
         self.assertTrue(_is_canned(out[0]))
         self.assertTrue(_is_bad(out[1]))
         self.assertTrue(_is_bad(out[2]))
-        # wedge ではない異常終了 → 残存 Aspen の掃除 kill が 1 回
+        # an abnormal exit rather than a wedge -> one cleanup kill for any leftover Aspen
         self.assertEqual(rec.calls, 1)
 
     def test_full_hang_all_bad(self):
-        """全 wedge：1 件も返らず、全件 bad、kill が呼ばれる。"""
+        """Full wedge: nothing comes back, every item is bad, and kill is called."""
         rec = _KillRecorder()
         ev = _make_evaluator("full_hang", rec)
         out = ev.evaluate_topology(TOPO, [[0.0]] * 3)
@@ -109,7 +113,7 @@ class TestSubprocessEvaluatorTopology(unittest.TestCase):
 
 
 class TestTimingRecords(unittest.TestCase):
-    """計測（timing）: record-only の実時間記録が評価結果と整合すること。"""
+    """Timing: the record-only wall-clock measurements are consistent with the evaluation results."""
 
     def test_normal_group_recorded(self):
         rec = _KillRecorder()
@@ -134,7 +138,7 @@ class TestTimingRecords(unittest.TestCase):
         self.assertTrue(g["wedged"])
         self.assertEqual(g["n_results"], 2)
         self.assertEqual(len(g["eval_sec"]), 2)
-        # 失った時間 ≈ stall_sec（5s）以上（最後の受信から kill まで）
+        # the time lost is >= about stall_sec (5s): from the last receipt to the kill
         self.assertGreaterEqual(g["lost_sec"], 4.0)
 
     def test_groups_accumulate_across_calls(self):
@@ -147,7 +151,7 @@ class TestTimingRecords(unittest.TestCase):
 
 class TestSubprocessEvaluatorDetailed(unittest.TestCase):
     def test_detailed_normal(self):
-        """detailed ハッピーパス：metrics は canned。"""
+        """detailed happy path: the metrics are canned."""
         rec = _KillRecorder()
         ev = _make_evaluator("normal", rec)
         d = ev.evaluate_detailed(TOPO, [0.0])
@@ -155,7 +159,7 @@ class TestSubprocessEvaluatorDetailed(unittest.TestCase):
         self.assertEqual(rec.calls, 0)
 
     def test_detailed_full_hang_bad(self):
-        """detailed wedge：metrics は bad、kill が呼ばれる。"""
+        """detailed wedge: the metrics are bad and kill is called."""
         rec = _KillRecorder()
         ev = _make_evaluator("full_hang", rec)
         d = ev.evaluate_detailed(TOPO, [0.0])

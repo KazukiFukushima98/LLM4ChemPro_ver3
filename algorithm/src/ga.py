@@ -1,11 +1,13 @@
-"""GA 最適化（混合整数 GA）。
+"""GA optimization (mixed-integer GA).
 
-トポロジー表現は ss / active_topology 経由。
-Aspen 実装は Evaluator Protocol 経由で注入（aspen_builder / simulator を直接 import しない）。
+The topology representation is accessed through ss / active_topology.
+The Aspen implementation is injected via the Evaluator Protocol (aspen_builder /
+simulator are never imported directly).
 
-移植元: 旧 run_iteration.py
+Ported from: the old run_iteration.py
     _evaluate_population : L80-92
-    run_ga               : L99-274（evaluate_group の評価ロジックは AspenEvaluator に移管済み）
+    run_ga               : L99-274 (the evaluation logic of evaluate_group has already
+                           been moved into AspenEvaluator)
 """
 
 import random
@@ -38,9 +40,9 @@ from topology import (  # noqa: E402
 
 def _fitness(obj_value: float, purity: float, recovery: float,
              targets: dict, penalty_w: float) -> float:
-    """f = obj + λ[max(0, π_min−π)² + max(0, ρ_min−ρ)²]
+    """f = obj + lambda*[max(0, pi_min - pi)^2 + max(0, rho_min - rho)^2]
 
-    obj は目的値（energy または cost。12.2 の objective 切替に追従）。
+    obj is the objective value (energy or cost, following the objective switch of 12.2).
     """
     if obj_value >= BAD_VALUE:
         return BAD_VALUE
@@ -57,20 +59,20 @@ def run_ga(
     evaluator: Evaluator,
     seed: int = 1,
 ) -> tuple[Any, list[dict], int]:
-    """Mixed GA で ss の連続・バイナリ変数を最適化する。
+    """Optimize the continuous and binary variables of ss with a mixed GA.
 
     Parameters
     ----------
-    ss        : SS テンプレート（binary / continuous 変数の導出元）。
-    case      : case.yaml の内容（ga / optimization_targets / penalty_weight）。
-    evaluator : Evaluator Protocol 実装（AspenEvaluator など）。
-    seed      : 乱数シード。
+    ss        : SS template (the source of the binary / continuous variables).
+    case      : contents of case.yaml (ga / optimization_targets / penalty_weight).
+    evaluator : an Evaluator Protocol implementation (e.g. AspenEvaluator).
+    seed      : random seed.
 
     Returns
     -------
-    best     : 最良個体 (DEAP Individual)。
-    gen_log  : [{"gen": i, "best_fitness": f}, ...] (長さ n_gen)。
-    n_evals  : 総 Aspen 評価回数。
+    best     : the best individual (DEAP Individual).
+    gen_log  : [{"gen": i, "best_fitness": f}, ...] (length n_gen).
+    n_evals  : total number of Aspen evaluations.
     """
     bin_vars  = binary_variables(ss)
     cont_vars = continuous_variables(ss, case.get("membrane_model"))
@@ -82,13 +84,13 @@ def run_ga(
     n_gen     = ga_cfg["n_gen"]
     targets   = case["optimization_targets"]
 
-    # ---- 目的の切替（12.2）: energy（従来） / cost（$/tCO2）----
+    # ---- objective switch (12.2): energy (legacy) / cost ($/tCO2) ----
     cost_mode = str(targets.get("objective", "")).strip() == "minimize_cost"
     if cost_mode:
         econ = {**ECONOMICS_DEFAULTS, **(case.get("economics") or {})}
-        penalty_w = float(econ["penalty_weight"])   # コストスケールの λ（Lee の r）
+        penalty_w = float(econ["penalty_weight"])   # lambda on the cost scale (Lee's r)
     else:
-        penalty_w = float(case.get("penalty_weight", 1e5))  # YAML 1.1 は指数符号なし(1.0e5)を str で返すため明示変換
+        penalty_w = float(case.get("penalty_weight", 1e5))  # explicit cast: YAML 1.1 returns an unsigned exponent (1.0e5) as str
 
     def _objective(m: Metrics, x_cont: list, topology: dict) -> float:
         if not cost_mode or m.specific_energy >= BAD_VALUE:
@@ -116,11 +118,11 @@ def run_ga(
             ind[k] = max(lo, min(hi, ind[k]))
 
     def crossover(c1: Any, c2: Any) -> None:
-        # uniform crossover for binary part (旧 run_iteration.py:127-131)
+        # uniform crossover for binary part (old run_iteration.py:127-131)
         for k in range(n_binary):
             if random.random() < 0.5:
                 c1[k], c2[k] = c2[k], c1[k]
-        # blend crossover for continuous part (旧 :132-138)
+        # blend crossover for continuous part (old :132-138)
         for idx in range(n_cont):
             k = n_binary + idx
             gamma = (1.0 + 2.0 * 0.5) * random.random() - 0.5
@@ -129,18 +131,18 @@ def run_ga(
             c2[k] = gamma * v1 + (1.0 - gamma) * v2
 
     def mutate(ind: Any) -> None:
-        # flip mutation for binary part (旧 :141-144)
+        # flip mutation for binary part (old :141-144)
         for k in range(n_binary):
             if random.random() < 0.5:
                 ind[k] = 1.0 - float(round(ind[k]))
-        # Gaussian mutation for continuous part (旧 :145-149)
+        # Gaussian mutation for continuous part (old :145-149)
         for idx in range(n_cont):
             k = n_binary + idx
             if random.random() < 0.5:
                 ind[k] += random.gauss(0, sigma_cont[idx])
 
     def _evaluate_population(individuals: list) -> int:
-        """binary key でグループ化 → 各グループを一括 Aspen 評価。(旧 :80-92)"""
+        """Group by binary key, then evaluate each group in one Aspen batch. (old :80-92)"""
         groups: dict[tuple, list] = defaultdict(list)
         for ind in individuals:
             key = tuple(int(ind[k] > 0.5) for k in range(n_binary))
@@ -151,11 +153,14 @@ def run_ga(
             topology = active_topology(ss, q_active)
             reason = is_buildable(topology)
             if reason is not None:
-                # ビルド不能な組み合わせ（非膜の分流）は Aspen を回さず BAD で落とす
+                # Unbuildable combinations (splitting a non-membrane stream) are rejected as
+                # BAD without running Aspen
                 metrics_list = [Metrics.bad() for _ in inds]
             else:
-                # 連続 x はテンプレート全次元 → 具体トポロジー（pruning 後）の変数だけに
-                # 絞って渡す（evaluator 側の位置 zip との整列。topology.x_for_topology）
+                # The continuous x spans all template dimensions; narrow it down to the
+                # variables of the concrete topology (after pruning) before passing it on,
+                # so it lines up with the positional zip on the evaluator side
+                # (topology.x_for_topology)
                 x_list = [
                     x_for_topology(list(ind[n_binary:]), cont_vars, topology)
                     for ind in inds
@@ -168,7 +173,7 @@ def run_ga(
         return total
 
     random.seed(seed)
-    t0      = time.monotonic()   # gen_log の "t"＝最適化開始からの経過秒
+    t0      = time.monotonic()   # "t" in gen_log = seconds elapsed since the start of optimization
     pop     = toolbox.population(n=pop_size)
     n_evals = _evaluate_population(pop)
 
@@ -195,14 +200,15 @@ def run_ga(
         invalid = [ind for ind in offspring if not ind.fitness.valid]
         _t_eval0 = time.monotonic()
         n_evals += _evaluate_population(invalid)
-        t_eval_sec = round(time.monotonic() - _t_eval0, 2)   # この世代の評価実時間
+        t_eval_sec = round(time.monotonic() - _t_eval0, 2)   # wall-clock evaluation time of this generation
 
         pop[:] = offspring
         hof.update(pop)
-        # エリート保存: best のクローンで worst を置換（COORDINATION 4b-(1) 対応）。
-        # pop[-1] への上書きでは「末尾がたまたま選ばれた個体」を消すだけで best 残存の保証がないため、
-        # 明示的に最大 fitness（最小化なので最悪）を選んで置換する。
-        # 無効な fitness は inf 扱いで優先的に置換対象にする。
+        # Elitism: replace the worst individual with a clone of best (per COORDINATION 4b-(1)).
+        # Overwriting pop[-1] would merely erase whichever individual happened to land last and
+        # gives no guarantee that best survives, so pick the maximum fitness explicitly
+        # (the worst, since this is a minimization) and replace that one.
+        # Invalid fitness is treated as inf so such individuals are replaced first.
         worst_idx = max(
             range(len(pop)),
             key=lambda i: pop[i].fitness.values[0] if pop[i].fitness.valid else float("inf"),

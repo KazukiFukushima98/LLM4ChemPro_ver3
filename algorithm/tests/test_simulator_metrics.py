@@ -1,13 +1,16 @@
-"""_extract_metrics の質量収支ガード（COORDINATION Fix A）の単体テスト。
+"""Unit tests for the mass-balance guard in _extract_metrics (COORDINATION Fix A).
 
-リサイクル tear がヘッドレス COM 上で「収束」と返っても非物理な点（回収率 > 1）に
-落ちることがある（run12/iter_002 で実観測：製品 CO2 188.5 > feed 150 ＝回収 125.67%）。
-_extract_metrics に入れた検算ガードが、回収率 > recovery_physical_max を BAD で弾くことを検証する。
+A recycle tear can report "converged" over headless COM and still land on a
+non-physical point (recovery > 1); this was observed in run12/iter_002 (product
+CO2 188.5 > feed 150, i.e. 125.67% recovery). These tests check that the
+cross-check guard added to _extract_metrics rejects recovery >
+recovery_physical_max as BAD.
 
-simulator は pythoncom / aspen_builder（pywin32 依存）を import するため、import 不能環境では
-skip する。実 Aspen は不要：_safe をモックに差し替え、Aspen ツリーを読まずに値を注入する。
+simulator imports pythoncom / aspen_builder (which depend on pywin32), so the
+tests are skipped where those imports fail. Real Aspen is not needed: _safe is
+replaced with a mock that injects values without reading the Aspen tree.
 
-実行:
+Run:
     uv run python -m unittest algorithm.tests.test_simulator_metrics
 """
 
@@ -26,7 +29,7 @@ from evaluator import BAD_VALUE, Metrics  # noqa: E402
 try:
     from simulator import AspenEvaluator, build_unit_params  # noqa: E402
     _SIM_IMPORT_ERR = None
-except Exception as e:  # pragma: no cover - pywin32 不在環境
+except Exception as e:  # pragma: no cover - environment without pywin32
     AspenEvaluator = None
     build_unit_params = None
     _SIM_IMPORT_ERR = e
@@ -38,23 +41,23 @@ def _is_bad(m: Metrics) -> bool:
 
 @unittest.skipUnless(
     AspenEvaluator is not None,
-    f"simulator import 不可（pywin32 不在等）: {_SIM_IMPORT_ERR}",
+    f"cannot import simulator (e.g. pywin32 missing): {_SIM_IMPORT_ERR}",
 )
 class TestMassBalanceGuard(unittest.TestCase):
-    """_extract_metrics の回収率検算ガードを、_safe モックで実 Aspen なしに検証。"""
+    """Exercise the recovery cross-check guard of _extract_metrics with a _safe mock, without real Aspen."""
 
     PURITY = 0.9
-    V0_MF = 150.0   # feed CO2 流量（固定）
-    POWER = 10.0    # 各 energy block の WNET
+    V0_MF = 150.0   # feed CO2 flow rate (fixed)
+    POWER = 10.0    # WNET of each energy block
 
     def _evaluator(self, prod_mf: float) -> AspenEvaluator:
-        """case={} で AspenEvaluator を構築し、_safe を path で値を返すモックに差し替える。
+        """Build an AspenEvaluator with case={} and replace _safe with a mock that returns a value per path.
 
-        _extract_metrics が読む 4 種の path を判別する:
-          MOLEFRAC           → 純度
-          WNET               → 動力
-          MOLEFLOW + "\\V0\\" → feed CO2 流量
-          MOLEFLOW (その他)   → 製品 CO2 流量
+        It distinguishes the 4 kinds of path that _extract_metrics reads:
+          MOLEFRAC           -> purity
+          WNET               -> power
+          MOLEFLOW + "\\V0\\" -> feed CO2 flow rate
+          MOLEFLOW (other)    -> product CO2 flow rate
         """
         ev = AspenEvaluator({}, "", "")
 
@@ -75,25 +78,25 @@ class TestMassBalanceGuard(unittest.TestCase):
         return ev._extract_metrics(aspen=None, product_vid="V7", energy_blocks=["MEMB1"])
 
     def test_recovery_above_one_is_bad(self):
-        """回収率 1.257（run12 の非物理点）→ BAD で弾く。"""
+        """Recovery 1.257 (the non-physical point from run12) -> rejected as BAD."""
         m = self._extract(prod_mf=188.5)  # 188.5 / 150 = 1.2567
-        self.assertTrue(_is_bad(m), f"非物理(回収>1)が BAD でない: {m}")
+        self.assertTrue(_is_bad(m), f"non-physical point (recovery>1) not marked BAD: {m}")
 
     def test_recovery_below_one_is_ok(self):
-        """回収率 0.773（正常域）→ 通す。"""
+        """Recovery 0.773 (the normal range) -> accepted."""
         m = self._extract(prod_mf=115.9)  # 115.9 / 150 = 0.7727
-        self.assertFalse(_is_bad(m), f"正常解が誤って BAD: {m}")
+        self.assertFalse(_is_bad(m), f"valid solution wrongly marked BAD: {m}")
         self.assertAlmostEqual(m.recovery, 115.9 / 150.0, places=4)
         self.assertAlmostEqual(m.purity, self.PURITY, places=6)
 
     def test_recovery_exactly_one_is_ok(self):
-        """回収率 1.0（境界・全量回収）→ 既定 max=1.02 以下なので通す。"""
+        """Recovery 1.0 (the boundary, full recovery) -> accepted, being at or below the default max=1.02."""
         m = self._extract(prod_mf=150.0)  # 150 / 150 = 1.0
-        self.assertFalse(_is_bad(m), f"回収=1.0 が誤って BAD: {m}")
+        self.assertFalse(_is_bad(m), f"recovery=1.0 wrongly marked BAD: {m}")
         self.assertAlmostEqual(m.recovery, 1.0, places=6)
 
     def test_threshold_is_configurable(self):
-        """recovery_physical_max を case で下げると、境界が動く。"""
+        """Lowering recovery_physical_max in the case moves the threshold."""
         ev = AspenEvaluator({"recovery_physical_max": 0.9}, "", "")
 
         def fake_safe(aspen, path, default=None):
@@ -107,15 +110,15 @@ class TestMassBalanceGuard(unittest.TestCase):
 
         ev._safe = fake_safe  # type: ignore[method-assign]
         m = ev._extract_metrics(aspen=None, product_vid="V7", energy_blocks=["MEMB1"])
-        self.assertTrue(_is_bad(m), f"max=0.9 下で 0.95 が BAD でない: {m}")
+        self.assertTrue(_is_bad(m), f"0.95 not marked BAD under max=0.9: {m}")
 
 
 @unittest.skipUnless(
     AspenEvaluator is not None,
-    f"simulator import 不可（pywin32 不在等）: {_SIM_IMPORT_ERR}",
+    f"cannot import simulator (e.g. pywin32 missing): {_SIM_IMPORT_ERR}",
 )
 class TestEnergyGuard(unittest.TestCase):
-    """エネルギー検算ガード：WNET 読み取り全滅（合計 0）の偽ゼロエネルギー解を弾く。"""
+    """Energy cross-check guard: reject the spurious zero-energy solution that arises when every WNET read fails (sum 0)."""
 
     def _extract(self, wnet: float, energy_blocks: list[str]) -> Metrics:
         ev = AspenEvaluator({}, "", "")
@@ -133,28 +136,28 @@ class TestEnergyGuard(unittest.TestCase):
         return ev._extract_metrics(aspen=None, product_vid="V7", energy_blocks=energy_blocks)
 
     def test_zero_wnet_with_blocks_is_bad(self):
-        """VP がいるのに WNET 合計 0 → 偽の spec_e=0 として BAD で弾く。"""
+        """WNET sums to 0 despite VPs being present -> rejected as BAD (a spurious spec_e=0)."""
         m = self._extract(wnet=0.0, energy_blocks=["VP1", "VP2"])
-        self.assertTrue(_is_bad(m), f"偽ゼロエネルギー解が BAD でない: {m}")
+        self.assertTrue(_is_bad(m), f"spurious zero-energy solution not marked BAD: {m}")
 
     def test_positive_wnet_with_blocks_is_ok(self):
         m = self._extract(wnet=10.0, energy_blocks=["VP1"])
-        self.assertFalse(_is_bad(m), f"正常解が誤って BAD: {m}")
+        self.assertFalse(_is_bad(m), f"valid solution wrongly marked BAD: {m}")
         self.assertGreater(m.specific_energy, 0.0)
 
     def test_no_energy_blocks_zero_energy_allowed(self):
-        """energy_blocks が空（VP/COMP 無しの構造）は spec_e=0 を許す（別途ペナルティが効く）。"""
+        """An empty energy_blocks (a structure with no VP/COMP) may have spec_e=0 (a separate penalty covers it)."""
         m = self._extract(wnet=0.0, energy_blocks=[])
-        self.assertFalse(_is_bad(m), f"blocks なしの 0 エネルギーが誤って BAD: {m}")
+        self.assertFalse(_is_bad(m), f"zero energy with no blocks wrongly marked BAD: {m}")
         self.assertEqual(m.specific_energy, 0.0)
 
 
 @unittest.skipUnless(
     build_unit_params is not None,
-    f"simulator import 不可（pywin32 不在等）: {_SIM_IMPORT_ERR}",
+    f"cannot import simulator (e.g. pywin32 missing): {_SIM_IMPORT_ERR}",
 )
 class TestBuildUnitParams(unittest.TestCase):
-    """x → unit_params の組み立て（12.1: tie 展開と Robeson N2 導出）。Aspen 不要の純関数。"""
+    """Assembling unit_params from x (12.1: tie expansion and Robeson-derived N2). A pure function, no Aspen needed."""
 
     _TOPO2 = {"units": {"MEMB1": {}, "MEMB2": {}}}
 
@@ -167,14 +170,14 @@ class TestBuildUnitParams(unittest.TestCase):
         self.assertEqual(up, {"MEMB1": {"area": 20000.0, "p_permeate": 0.2}})
 
     def test_tie_variable_expands_to_all_membranes_with_n2(self):
-        """"MEMB*" の共有 permeance が全 MEMB に展開され、N2 が Robeson で導出される。"""
+        """The shared "MEMB*" permeance expands to every MEMB, and N2 is derived via Robeson."""
         from unit_registry import robeson_alpha
         cont_vars = [
             {"name": "MEMB_perm",  "unit_param": ["MEMB*", "permeance_CO2"]},
             {"name": "MEMB1_area", "unit_param": ["MEMB1", "area"]},
             {"name": "MEMB2_area", "unit_param": ["MEMB2", "area"]},
         ]
-        p = 10.82708  # ≒ 4000 GPU
+        p = 10.82708  # ~= 4000 GPU
         up = build_unit_params([p, 500000.0, 300000.0], cont_vars, self._TOPO2,
                                membrane_model={})
         alpha = robeson_alpha(p, {})
@@ -185,7 +188,7 @@ class TestBuildUnitParams(unittest.TestCase):
         self.assertAlmostEqual(up["MEMB2"]["area"], 300000.0)
 
     def test_tie_expands_only_to_surviving_membranes(self):
-        """pruned topology では残存 MEMB だけに展開される。"""
+        """In a pruned topology, it expands only to the surviving MEMBs."""
         cont_vars = [
             {"name": "MEMB_perm",  "unit_param": ["MEMB*", "permeance_CO2"]},
             {"name": "MEMB1_area", "unit_param": ["MEMB1", "area"]},
@@ -196,23 +199,23 @@ class TestBuildUnitParams(unittest.TestCase):
         self.assertIn("permeance_N2", up["MEMB1"])
 
     def test_per_unit_permeance_gets_n2(self):
-        """段別独立（tie=False）の {unit}_perm でも N2 が導出される。"""
+        """N2 is derived for per-stage independent (tie=False) {unit}_perm as well."""
         cont_vars = [
             {"name": "MEMB1_perm", "unit_param": ["MEMB1", "permeance_CO2"]},
             {"name": "MEMB2_perm", "unit_param": ["MEMB2", "permeance_CO2"]},
         ]
         up = build_unit_params([2.70677, 13.53385], cont_vars, self._TOPO2,
                                membrane_model={"tie": False})
-        # 1000 GPU の上界 α ≈ 79.6、5000 GPU の上界 α ≈ 45.6 → N2 = CO2/α
+        # upper-bound alpha ~= 79.6 at 1000 GPU and ~= 45.6 at 5000 GPU -> N2 = CO2/alpha
         self.assertLess(up["MEMB1"]["permeance_N2"], up["MEMB1"]["permeance_CO2"])
         self.assertLess(up["MEMB2"]["permeance_N2"], up["MEMB2"]["permeance_CO2"])
-        # 高透過側ほど α が下がる（N2/CO2 比が大きい）
+        # the more permeable side has a lower alpha (a larger N2/CO2 ratio)
         ratio1 = up["MEMB1"]["permeance_N2"] / up["MEMB1"]["permeance_CO2"]
         ratio2 = up["MEMB2"]["permeance_N2"] / up["MEMB2"]["permeance_CO2"]
         self.assertLess(ratio1, ratio2)
 
     def test_no_n2_injection_without_membrane_model(self):
-        """membrane_model=None なら permeance_CO2 をそのまま書くだけ（従来互換）。"""
+        """With membrane_model=None, permeance_CO2 is written through unchanged (backward compatible)."""
         cont_vars = [{"name": "MEMB1_perm", "unit_param": ["MEMB1", "permeance_CO2"]}]
         up = build_unit_params([2.70677], cont_vars, self._TOPO2, membrane_model=None)
         self.assertNotIn("permeance_N2", up["MEMB1"])

@@ -1,9 +1,10 @@
-"""ga.run_ga の単体テスト（Aspen 不要・モック evaluator）。
+"""Unit tests for ga.run_ga (no Aspen required; mock evaluator).
 
-現状は x 整列（pruning 後トポロジーへのフィルタ）の検証が主。BO が本番最適化器の
-ため GA の網羅テストは持たないが、x_for_topology の配線は GA 経路でも独立に確認する。
+At present these mainly verify the x alignment (filtering to the pruned topology). BO is the
+production optimizer, so there is no exhaustive GA test suite, but the x_for_topology wiring is
+checked independently on the GA path as well.
 
-実行:
+Run:
     uv run python -m unittest tests.test_ga
 """
 
@@ -29,7 +30,7 @@ except ImportError:  # pragma: no cover
 
 
 class TestGAXAlignmentWithPruning(unittest.TestCase):
-    """連続 x が具体トポロジー（pruning 後）の変数だけに絞られて evaluator に渡ること。"""
+    """The continuous x is narrowed to the variables of the concrete topology (after pruning) before reaching the evaluator."""
 
     def test_x_filtered_to_pruned_topology(self) -> None:
         from ga import run_ga
@@ -63,22 +64,22 @@ class TestGAXAlignmentWithPruning(unittest.TestCase):
             best, gen_log, n_evals = run_ga(ss, case, _DimCheckMock(), seed=5)
 
         self.assertEqual(mismatches, [],
-                         f"x の次元がトポロジーの変数数と不一致: {mismatches}")
-        # pruned 側（2変数）と 2 段側（4変数）の両方を GA が踏んでいること
-        # （seed 固定で決定論。踏んでいなければ seed を変えて再現性を確認する）
-        self.assertIn(2, seen_dims, f"pruned 側が未評価: dims={seen_dims}")
-        self.assertIn(4, seen_dims, f"2段側が未評価: dims={seen_dims}")
+                         f"dimension of x does not match the topology's variable count: {mismatches}")
+        # the GA must have visited both the pruned side (2 variables) and the 2-stage side (4 variables)
+        # (deterministic for a fixed seed. If it does not, change the seed and check reproducibility)
+        self.assertIn(2, seen_dims, f"pruned side never evaluated: dims={seen_dims}")
+        self.assertIn(4, seen_dims, f"2-stage side never evaluated: dims={seen_dims}")
         self.assertEqual(len(gen_log), 3)
-        # 計測フィールド "t"（経過秒）が単調非減少で付いている
+        # the timing field "t" (elapsed seconds) is present and monotonically non-decreasing
         ts = [g["t"] for g in gen_log]
         self.assertTrue(all(b >= a for a, b in zip(ts, ts[1:])), ts)
-        # 各世代の評価実時間 t_eval（非負）
+        # wall-clock evaluation time t_eval per generation (non-negative)
         for g in gen_log:
             self.assertGreaterEqual(g["t_eval"], 0.0)
 
 
 class TestGACostObjective(unittest.TestCase):
-    """12.2: objective=minimize_cost で GA の fitness がコスト軸で回り完走する。"""
+    """12.2: with objective=minimize_cost the GA fitness runs on the cost axis and the run completes."""
 
     def test_cost_mode_completes(self) -> None:
         from ga import run_ga
@@ -99,13 +100,13 @@ class TestGACostObjective(unittest.TestCase):
             "optimization_targets": {"purity_min": 0.9, "recovery_min": 0.7,
                                      "objective": "minimize_cost"},
             "feed": {"flowbase": "MASS", "basis": "MOLE-FRAC",
-                     "totflow": 80307.0, "co2_frac": 0.15},   # kmol/h（モル解釈）
+                     "totflow": 80307.0, "co2_frac": 0.15},   # kmol/h (molar interpretation)
             "ga": {"pop_size": 6, "n_gen": 2},
         }
         with redirect_stdout(io.StringIO()):
             best, gen_log, n_evals = run_ga(ss, case, _FeasibleMock(), seed=7)
         self.assertEqual(len(gen_log), 2)
-        # コストスケール（数十 $/t）＋ penalty なし → fitness は BAD ではなく小さい値
+        # cost scale (tens of $/t) with no penalty -> fitness is a small value, not BAD
         self.assertLess(gen_log[-1]["best_fitness"], 1000.0)
 
 

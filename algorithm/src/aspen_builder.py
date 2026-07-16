@@ -1,27 +1,32 @@
-"""Dynamically build an Aspen model from a concrete topology (具体トポロジー).
+"""Dynamically build an Aspen model from a concrete topology.
 
-旧 LLM4ChemPro/algorithm/src/aspen_builder.py からの忠実移植。
-変更は ARCHITECTURE 3.2 / 3.4 / 4節 / 10節 に定めた3点に限定する:
+A faithful port of the old LLM4ChemPro/algorithm/src/aspen_builder.py.
+Changes are limited to the three points defined in ARCHITECTURE 3.2 / 3.4 / 4 / 10:
 
-  (1) 入力インターフェース
-      旧: (adj_matrix, arc_definitions, unit_params, aspen_file)
-      新: (topology, aspen_file)。topology は {vertices, arcs, units} の3辞書（具体トポロジー）。
-      整数インデックスではなく安定文字列ID（V7 等）をそのまま Aspen ストリーム名に使う。
-      補助名 VS{i}T{j} / MIXV{j} / DV{i} / VPI{n} / VP{n} の {i}/{j}/{n} は vid・unit名の数値部分。
+  (1) Input interface
+      old: (adj_matrix, arc_definitions, unit_params, aspen_file)
+      new: (topology, aspen_file). topology is the 3-dict concrete topology
+      {vertices, arcs, units}. Stable string IDs (e.g. V7) are used directly as Aspen
+      stream names instead of integer indices. In the auxiliary names
+      VS{i}T{j} / MIXV{j} / DV{i} / VPI{n} / VP{n}, {i}/{j}/{n} are the numeric parts
+      of the vid / unit name.
 
-  (2) Mixer 規則に (3) sink 頂点を追加
-      旧 _find_mixer_vertices は規則 (1)(2) のみ。ver2 では sink (role=product/residue) を
-      Mixer 化してストリーム化することで純度/回収率の測定点を sink 上に固定する（ARCHITECTURE 3.4）。
-      規則は topology.mixer_vertices に一元化済みなので、そこに委譲する。
-      これに伴い _find_mixer_vertices は削除（重複定義を避ける）。
+  (2) Sink vertices added as Mixer rule (3)
+      The old _find_mixer_vertices had rules (1)(2) only. In ver2, sinks
+      (role=product/residue) are turned into Mixers so that they carry streams, which
+      fixes the purity/recovery measurement points on the sinks (ARCHITECTURE 3.4).
+      The rule is centralized in topology.mixer_vertices, so we delegate to it and
+      _find_mixer_vertices is removed here (avoiding a duplicate definition).
 
-  (3) feed 既定の廃止
-      旧 _configure_feed は DAC 既定（420ppm, MOLE-FRAC 等）を持っていたが削除する。
-      builder 内に feed 既定は持たず、feed ストリームの存在だけ Step 2 で確保する。
-      組成・流量・基準（FLOWBASE/TOTFLOW/CARBO-01/NITRO-01）の上書きは
-      AspenEvaluator 側（フェーズ4）で case.yaml から行う（ARCHITECTURE 10節）。
+  (3) Removal of the feed default
+      The old _configure_feed carried a DAC default (420 ppm, MOLE-FRAC, etc.); it is
+      removed. The builder holds no feed default and only ensures in Step 2 that the
+      feed stream exists. Composition, flow rate and basis
+      (FLOWBASE/TOTFLOW/CARBO-01/NITRO-01) are overridden by AspenEvaluator (phase 4)
+      from case.yaml (ARCHITECTURE 10).
 
-上記以外（膜ブロック生成、VP自動挿入、命名規則、ポート接続のロジック）は旧実装どおり。
+Everything else (membrane block creation, auto-VP insertion, naming rules, port
+connection logic) follows the old implementation.
 
 Stream naming:
   V{i}      : representative stream for vertex (= vertex ID such as "V7")
@@ -30,8 +35,8 @@ Stream naming:
   MIXV{j}   : Mixer block name ({j} is vid numeric part)
   MEMB{n}   : membrane block (unit name as-is)
   VP{n}/VPI{n} : auto-VP block and its inlet stream (n matches MEMB{n})
-  VPO{n}/HXV{n}: auto-VP 出口の中間ストリームと自動冷却器（35°C・ver3 12.4）
-  HCI{n}/HXC{n}: COMP{n} 出口の中間ストリームと自動冷却器（同上）
+  VPO{n}/HXV{n}: intermediate stream at the auto-VP outlet and its auto-cooler (35 degC, ver3 12.4)
+  HCI{n}/HXC{n}: intermediate stream at the COMP{n} outlet and its auto-cooler (same)
 
 NOTE: Aspen does not allow underscores in block or stream names.
 """
@@ -46,13 +51,15 @@ from topology import mixer_vertices as _topology_mixer_vertices  # noqa: E402
 
 
 def kill_aspen_image(timeout: float = 20) -> None:
-    """taskkill /f /im AspenPlus.exe をタイムアウト付きで実行する（子プロセス側の後始末用）。
+    """Run "taskkill /f /im AspenPlus.exe" with a timeout (cleanup on the child-process side).
 
-    os.system はタイムアウトが無く、kill 不能な wedge Aspen で呼び出し元ごと無制限に
-    ブロックし得る（run13 の 85 分ハングの主因と同型。subprocess_evaluator 側は修正済み）。
-    子プロセス（worker）内の Aspen 後始末はすべて本関数を経由する。
-    失敗・タイムアウトは握りつぶす——後始末の失敗で評価ラインを止めないことが最優先で、
-    残留 Aspen は次のビルド起動時の taskkill か親の wedge 処理が回収する。
+    os.system has no timeout and can block the caller indefinitely on a wedged Aspen that
+    cannot be killed (the same failure mode as the 85-minute hang in run13; already fixed
+    on the subprocess_evaluator side). All Aspen cleanup inside a child process (worker)
+    goes through this function.
+    Failures and timeouts are swallowed: the top priority is not to stall the evaluation
+    pipeline over a failed cleanup, and any leftover Aspen is reclaimed by the taskkill at
+    the next build startup or by the parent's wedge handling.
     """
     try:
         subprocess.run(
@@ -106,7 +113,7 @@ def build_aspen_from_epnt(topology, aspen_file):
     # Step 0: Identify Mixer vertices
     #   (1) src vertex of membrane_permeate/retentate arcs
     #   (2) any vertex with in-degree >= 2
-    #   (3) sink (product/residue) vertices  ← ver2 で追加（測定点をストリーム化）
+    #   (3) sink (product/residue) vertices  <- added in ver2 (measurement points as streams)
     # Rule is centralized in topology.mixer_vertices; delegate to it.
     # --------------------------------------------------
     mixer_set = _topology_mixer_vertices(topology)
@@ -127,10 +134,12 @@ def build_aspen_from_epnt(topology, aspen_file):
             continue
 
         if arc_def.get("unit"):
-            # Unit arc (membrane included). 出口名は VS{_num(i)}T{_num(j)}。
-            # ポート接続は unit 側（_create_membrane / _create_compressor 等）が行うが、
-            # ストリーム生成(Step2)とミキサー F(IN)への登録(Step3)はここで積む必要がある。
-            # 膜だけ pass で抜けていたのが3段ビルド失敗の原因（VS{i}T{j} 未生成）。
+            # Unit arc (membrane included). Outlet name is VS{_num(i)}T{_num(j)}.
+            # Port connection is done on the unit side (_create_membrane / _create_compressor
+            # etc.), but stream creation (Step 2) and registration to the Mixer F(IN)
+            # (Step 3) must be queued here.
+            # Membranes falling through to pass here caused the 3-stage build failure
+            # (VS{i}T{j} was never created).
             mixer_inputs[j].append(f"VS{_num(i)}T{_num(j)}")
         else:
             # No-op arc (feed etc.) → feed the upstream vertex stream directly into Mixer
@@ -167,9 +176,11 @@ def build_aspen_from_epnt(topology, aspen_file):
         mixer_name = f"MIXV{_num(j)}"
         block_node.Elements.Add(f"{mixer_name}!Mixer")
         aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Input\T_EST").value = 25
-        # ver3 12.4: PRES=0 ＝「入口ストリームの最小圧に追従」。旧値 1.0（固定）は
-        # feed を昇圧しても膜入口 Mixer で 1 bar に戻し COMP を無効化する罠だった。
-        # 全ストリーム 1 bar の既存構成では結果不変（2026-07-10 実機回帰確認済み）。
+        # ver3 12.4: PRES=0 means "follow the minimum pressure of the inlet streams".
+        # The old fixed value of 1.0 was a trap: even when the feed was pressurized, the
+        # membrane-inlet Mixer reset it to 1 bar and nullified the COMP.
+        # Results are unchanged for existing all-1-bar configurations (regression
+        # confirmed on the real tool, 2026-07-10).
         aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Input\PRES").value  = 0.0
         for s in mixer_inputs[j]:
             aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Ports\F(IN)").Elements.Add(s)
@@ -216,8 +227,9 @@ def set_continuous_variables(aspen, unit_params):
             )
             if node is not None:
                 node.value = params["p_permeate"]
-        # ver3 12.1（Robeson 膜モデル）: permeance を GA 変数として書き込む分岐。
-        # ノードパスは _create_membrane の初期設定と同一（インターフェース追加のみ）。
+        # ver3 12.1 (Robeson membrane model): branch that writes permeance as a GA variable.
+        # The node paths are identical to the initial setup in _create_membrane (this only
+        # adds an interface).
         if "permeance_CO2" in params:
             node = aspen.Tree.FindNode(
                 rf'\Data\Blocks\{unit_name}\Data\{unit_name}.L\{unit_name}.L("CARBO-01")\VALUE'
@@ -310,35 +322,39 @@ def _create_and_connect_unit(aspen, block_node, unit_name, arcs,
     elif "heater" in arc_types:
         _create_heater(aspen, block_node, unit_name, arcs, params, mixer_vertices)
     else:
-        # 未知のユニット型を黙ってスキップすると「ブロックが無いのにストリームだけある」
-        # 壊れたフローシートが無言で Aspen に渡り、原因不明の非収束として現れる。
-        # 明示的に失敗させ、呼び出し側（_build）の BAD 経路＋診断 print に乗せる。
+        # Silently skipping an unknown unit type would hand Aspen a broken flowsheet with
+        # streams but no block, surfacing later as an unexplained convergence failure.
+        # Fail explicitly instead, so the caller (_build) routes it to the BAD path and
+        # its diagnostic print.
         raise ValueError(
             f"unit {unit_name!r}: unsupported arc types {sorted(arc_types)} "
             f"(no block builder registered)"
         )
 
 
-# ver3 12.4（ユーザ決定 2026-07-10）: 圧縮系（auto-VP・明示 COMP）の出口に自動付与する
-# 冷却温度 [°C]。Lee (2018) の膜運転温度と同じ。中間冷却が無いと圧縮熱が下流へ
-# カスケードして動力が膨張し（Fig.3a 再現: P_tot 論文比 1.38 → 35°C 冷却で 0.94）、
-# 高分子膜の許容温度も超える。冷却は auto-VP と同じ「工学的標準装備」として builder が
-# 自動挿入し、GA/SST の探索対象にしない。Heater duty は電力ではないので energy には
-# 算入しない（冷却水コストは Lee もモデル外）。
+# ver3 12.4 (user decision, 2026-07-10): cooling temperature [degC] applied automatically
+# at the outlet of compression equipment (auto-VP and explicit COMP). Same as the membrane
+# operating temperature in Lee (2018). Without intercooling, the heat of compression
+# cascades downstream and inflates the power (Fig.3a reproduction: P_tot 1.38x the paper,
+# vs 0.94x with 35 degC cooling), and it also exceeds the allowable temperature of polymeric
+# membranes. Like the auto-VP, cooling is standard engineering equipment that the builder
+# inserts automatically and that is not exposed to the GA/SST search. Heater duty is not
+# electrical power, so it is not counted in energy (cooling-water cost is outside Lee's
+# model as well).
 AUTO_COOLER_TEMP_C = 35.0
 
 
 def _attach_cooler(aspen, block_node, stream_node, source_port_path,
                    cooler_name, inter_stream, out):
-    """圧縮系ブロックの出口に 35°C 冷却器（Heater・圧損なし）を挟む。
+    """Insert a 35 degC cooler (Heater, no pressure drop) at a compression block outlet.
 
-    <source>.P(OUT) → inter_stream → {cooler_name}.F(IN)、{cooler_name}.P(OUT) → out
+    <source>.P(OUT) -> inter_stream -> {cooler_name}.F(IN), {cooler_name}.P(OUT) -> out
     """
     stream_node.Elements.Add(inter_stream)
     aspen.Tree.FindNode(source_port_path).Elements.Add(inter_stream)
     block_node.Elements.Add(f"{cooler_name}!Heater")
     aspen.Tree.FindNode(rf"\Data\Blocks\{cooler_name}\Input\TEMP").value = AUTO_COOLER_TEMP_C
-    aspen.Tree.FindNode(rf"\Data\Blocks\{cooler_name}\Input\PRES").value = 0.0  # 圧損なし
+    aspen.Tree.FindNode(rf"\Data\Blocks\{cooler_name}\Input\PRES").value = 0.0  # no pressure drop
     aspen.Tree.FindNode(rf"\Data\Blocks\{cooler_name}\Ports\F(IN)").Elements.Add(inter_stream)
     aspen.Tree.FindNode(rf"\Data\Blocks\{cooler_name}\Ports\P(OUT)").Elements.Add(out)
 
@@ -353,7 +369,7 @@ def _create_membrane(aspen, block_node, unit_name, arcs, params, mixer_vertices,
     Inlet (Inlet(IN)) = vid string (stream output by the Mixer at the src vertex)
 
     A VP{n} (Compr, outlet=1 bar) + auto-cooler is inserted on the permeate side:
-      MEMB{n}.Permeate(OUT) → VPI{n} → VP{n} → VPO{n} → HXV{n}(35°C) → (original downstream)
+      MEMB{n}.Permeate(OUT) -> VPI{n} -> VP{n} -> VPO{n} -> HXV{n}(35 degC) -> (original downstream)
     """
     stream_node = aspen.Tree.FindNode(r'\Data\Streams')
     memb_num = unit_name.replace("MEMB", "")
@@ -403,7 +419,7 @@ def _create_membrane(aspen, block_node, unit_name, arcs, params, mixer_vertices,
             aspen.Tree.FindNode(rf"\Data\Blocks\{vp_name}\Input\OPT_SPEC").value   = "PRES"
             aspen.Tree.FindNode(rf"\Data\Blocks\{vp_name}\Input\PRES").value       = 1.0
             aspen.Tree.FindNode(rf"\Data\Blocks\{vp_name}\Ports\F(IN)").Elements.Add(vpi_name)
-            # 自動冷却（12.4）: VP{n} → VPO{n} → HXV{n}(35°C) → out
+            # Auto-cooling (12.4): VP{n} -> VPO{n} -> HXV{n}(35 degC) -> out
             _attach_cooler(
                 aspen, block_node, stream_node,
                 rf"\Data\Blocks\{vp_name}\Ports\P(OUT)",
@@ -418,7 +434,7 @@ def _create_membrane(aspen, block_node, unit_name, arcs, params, mixer_vertices,
 
 
 def _create_compressor(aspen, block_node, unit_name, arcs, params, mixer_vertices):
-    """Create a Compr block and connect its ports（出口に自動冷却器付き・12.4）."""
+    """Create a Compr block and connect its ports (with an auto-cooler at the outlet, 12.4)."""
     stream_node = aspen.Tree.FindNode(r'\Data\Streams')
     comp_num = unit_name.replace("COMP", "")
     block_node.Elements.Add(f"{unit_name}!Compr")
@@ -429,7 +445,7 @@ def _create_compressor(aspen, block_node, unit_name, arcs, params, mixer_vertice
 
     for i, j, _ in arcs:
         aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Ports\F(IN)").Elements.Add(i)
-        # 自動冷却（12.4）: COMP{n} → HCI{n} → HXC{n}(35°C) → out
+        # Auto-cooling (12.4): COMP{n} -> HCI{n} -> HXC{n}(35 degC) -> out
         _attach_cooler(
             aspen, block_node, stream_node,
             rf"\Data\Blocks\{unit_name}\Ports\P(OUT)",
@@ -439,11 +455,12 @@ def _create_compressor(aspen, block_node, unit_name, arcs, params, mixer_vertice
 
 
 def _create_expander(aspen, block_node, unit_name, arcs, params, mixer_vertices):
-    """Create a Compr block in TURBINE mode（膨張機・電力回収。ver3 12.4）.
+    """Create a Compr block in TURBINE mode (expander, power recovery; ver3 12.4).
 
-    _create_compressor と同型（MODEL_TYPE のみ TURBINE）。出口圧は params の
-    outlet_pressure（既定 1.0 bar＝大気放出）で、GA 変数は持たない。WNET は負値
-    （回収電力）で energy_breakdown に載り、比エネルギー・コストに算入される。
+    Identical in form to _create_compressor (only MODEL_TYPE differs, TURBINE). The outlet
+    pressure comes from params outlet_pressure (default 1.0 bar = discharge to atmosphere)
+    and is not a GA variable. WNET appears in energy_breakdown as a negative value
+    (recovered power) and is counted in the specific energy and cost.
     """
     block_node.Elements.Add(f"{unit_name}!Compr")
     aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Input\MODEL_TYPE").value = "TURBINE"

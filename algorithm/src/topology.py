@@ -1,15 +1,15 @@
-"""安定文字列IDのアーク辞書ベースのトポロジー表現。
+"""Arc-dictionary topology representation keyed by stable string IDs.
 
-責務:
-- SS テンプレート（candidate を含む超構造定義）の読み書き
-- 具体トポロジー（q 固定後）の生成: active_topology
-- 妥当性検査: validate（違反時 TopologyError）
-- 補助ユニットの導出: mixer_vertices / splitter_vertices / auto_vps
-- 頂点ID・候補IDの採番（max+1、再付番しない）
-- GA 変数リストの導出: binary_variables / continuous_variables
-- 論文用の隣接行列生成: to_matrix
+Responsibilities:
+- Reading/writing the SS template (superstructure definition including candidates)
+- Building a concrete topology once q is fixed: active_topology
+- Validity checking: validate (raises TopologyError on violation)
+- Deriving auxiliary units: mixer_vertices / splitter_vertices / auto_vps
+- Numbering vertex IDs and candidate IDs (max+1, never renumbered)
+- Deriving GA variable lists: binary_variables / continuous_variables
+- Generating the adjacency matrix for the paper: to_matrix
 
-メモリ表現:
+In-memory representation:
     ss = {
         "iteration": int,
         "vertices": {"V0": {"role": ..., "label": ...}, ...},
@@ -18,10 +18,10 @@
         "history":  [...],
     }
 
-ディスク表現（JSON）はタプルキーを持てないため arcs はリスト形式。
-load_ss / save_ss が相互変換する。
+The on-disk representation (JSON) cannot have tuple keys, so arcs is a list there.
+load_ss / save_ss convert between the two.
 
-依存: Python stdlib のみ（numpy は to_matrix の中でのみ import）。
+Dependencies: Python stdlib only (numpy is imported inside to_matrix only).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from collections.abc import Iterable
 from os.path import dirname
 from typing import Any
 
-# 同ディレクトリの unit_registry を import するためパスを足す
+# Add the path so that unit_registry in the same directory can be imported
 sys.path.insert(0, dirname(__file__))
 from unit_registry import (  # noqa: E402
     get_unit_type,
@@ -50,7 +50,7 @@ MembraneArcTypes = frozenset({"membrane_permeate", "membrane_retentate"})
 
 
 class TopologyError(ValueError):
-    """SS / 具体トポロジーの構造的不整合を示す例外。"""
+    """Raised on a structural inconsistency in an SS or a concrete topology."""
 
 
 # =========================================================
@@ -58,7 +58,7 @@ class TopologyError(ValueError):
 # =========================================================
 
 def _vid_num(vid: str) -> int:
-    """文字列ID "V12" → 12。"""
+    """String ID "V12" -> 12."""
     if not vid.startswith("V"):
         raise TopologyError(f"vertex id must start with 'V': {vid!r}")
     try:
@@ -68,7 +68,7 @@ def _vid_num(vid: str) -> int:
 
 
 def _qid_num(qid: str) -> int:
-    """候補ID "q_3" → 3。"""
+    """Candidate ID "q_3" -> 3."""
     if not qid.startswith("q_"):
         raise TopologyError(f"candidate id must start with 'q_': {qid!r}")
     try:
@@ -78,12 +78,14 @@ def _qid_num(qid: str) -> int:
 
 
 def next_vertex_id(vertices: dict[str, Any]) -> str:
-    """現存頂点IDの数値部分 +1 を返す純関数（カウンタ初期化・フォールバック用）。
+    """Pure function returning (max numeric part of existing vertex IDs) + 1
+    (used to initialize the counter and as a fallback).
 
-    vertices が空なら "V0"。
-    注意: 「過去に払い出した最大」は知らないため、最大番号の頂点を削除した後に
-    呼ぶと削除済みIDを再利用してしまう。SS への新規採番は allocate_vertex_id を使う
-    （ARCHITECTURE 3.1「削除しても再付番・再利用しない」）。
+    Returns "V0" if vertices is empty.
+    Note: it does not know "the largest ID ever issued", so calling it after
+    deleting the highest-numbered vertex would reuse a deleted ID. Use
+    allocate_vertex_id to issue new IDs into an SS
+    (ARCHITECTURE 3.1: "never renumber or reuse after deletion").
     """
     if not vertices:
         return "V0"
@@ -91,10 +93,12 @@ def next_vertex_id(vertices: dict[str, Any]) -> str:
 
 
 def next_candidate_id(arcs: dict[tuple[str, str], dict[str, Any]]) -> str:
-    """現存候補IDの数値部分 +1 を返す純関数（カウンタ初期化・フォールバック用）。
+    """Pure function returning (max numeric part of existing candidate IDs) + 1
+    (used to initialize the counter and as a fallback).
 
-    候補が一つもなければ "q_1"（1始まり）。
-    注意: next_vertex_id と同じ理由で、SS への新規採番は allocate_candidate_id を使う。
+    Returns "q_1" (1-based) if there is no candidate at all.
+    Note: for the same reason as next_vertex_id, use allocate_candidate_id to
+    issue new IDs into an SS.
     """
     nums: list[int] = []
     for meta in arcs.values():
@@ -105,10 +109,11 @@ def next_candidate_id(arcs: dict[tuple[str, str], dict[str, Any]]) -> str:
 
 
 def _ensure_id_counters(ss: dict[str, Any]) -> dict[str, int]:
-    """ss["id_counters"]（過去に払い出した最大番号）を保証して返す。
+    """Ensure and return ss["id_counters"] (the largest numbers ever issued).
 
-    キーが無い旧形式の SS（ss_seed.json 等）は現存最大値から初期化する（後方互換）。
-    手編集等でカウンタが現存最大より遅れている場合も現存最大まで引き上げる（防御）。
+    Legacy SS files without this key (e.g. ss_seed.json) are initialized from the
+    current maxima (backward compatibility). If hand-editing left a counter behind
+    the current maximum, it is raised to that maximum as well (defensive).
     """
     counters = ss.get("id_counters") or {}
     v_max = max((_vid_num(v) for v in ss.get("vertices", {})), default=-1)
@@ -124,11 +129,11 @@ def _ensure_id_counters(ss: dict[str, Any]) -> dict[str, int]:
 
 
 def allocate_vertex_id(ss: dict[str, Any]) -> str:
-    """SS に新しい頂点IDを払い出す（削除済みIDを再利用しない・ARCHITECTURE 3.1）。
+    """Issue a new vertex ID into the SS (never reusing a deleted ID; ARCHITECTURE 3.1).
 
-    「過去に払い出した最大＋1」。カウンタは ss["id_counters"] に永続化される
-    （save_ss で JSON に残る）ので、最大番号の頂点を削除→再追加しても
-    同じIDが別の物理的な流れに再割当されることはない。
+    It is "largest ever issued + 1". The counter is persisted in ss["id_counters"]
+    (save_ss keeps it in the JSON), so deleting and re-adding the highest-numbered
+    vertex can never reassign the same ID to a different physical stream.
     """
     counters = _ensure_id_counters(ss)
     counters["vertex"] += 1
@@ -136,7 +141,7 @@ def allocate_vertex_id(ss: dict[str, Any]) -> str:
 
 
 def allocate_candidate_id(ss: dict[str, Any]) -> str:
-    """SS に新しい候補ラベル q_k を払い出す（削除済みラベルを再利用しない）。"""
+    """Issue a new candidate label q_k into the SS (never reusing a deleted label)."""
     counters = _ensure_id_counters(ss)
     counters["candidate"] += 1
     return f"q_{counters['candidate']}"
@@ -147,25 +152,25 @@ def allocate_candidate_id(ss: dict[str, Any]) -> str:
 # =========================================================
 
 def load_ss(path: str) -> dict[str, Any]:
-    """JSON から SS を読み込み、メモリ表現（タプルキー arcs）に変換する。"""
+    """Load an SS from JSON and convert it to the in-memory form (tuple-keyed arcs)."""
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
     return _from_json(raw)
 
 
 def save_ss(ss: dict[str, Any], path: str) -> None:
-    """SS を JSON に保存する。arcs は from/to の数値順で安定ソート。
+    """Save an SS to JSON. arcs are stably sorted by the numeric parts of from/to.
 
-    書き込みはアトミック（同一ディレクトリの一時ファイル → os.replace）。
-    ss_current.json はライブ状態の正本であり、書き込み途中の強制終了
-    （Aspen 巻き添えの taskkill / Ctrl-C / ディスクフル）で不正 JSON に
-    なると外側ループ全体が止まるため、旧ファイルを無傷で残す。
+    The write is atomic (temp file in the same directory -> os.replace).
+    ss_current.json is the authoritative live state, and if a forced termination
+    mid-write (taskkill collateral from Aspen / Ctrl-C / disk full) left invalid
+    JSON the whole outer loop would stall, so the old file is left intact.
     """
     raw = _to_json(ss)
     tmp_path = f"{path}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(raw, f, indent=2, ensure_ascii=False)
-    os.replace(tmp_path, path)  # 同一ボリューム内なら Windows でも原子的
+    os.replace(tmp_path, path)  # atomic even on Windows within the same volume
 
 
 def _from_json(raw: dict[str, Any]) -> dict[str, Any]:
@@ -186,7 +191,8 @@ def _from_json(raw: dict[str, Any]) -> dict[str, Any]:
     }
     if "id_counters" in raw:
         ss["id_counters"] = dict(raw["id_counters"])
-    # 旧形式（id_counters なし）は現存最大から初期化（後方互換・ss_seed.json は変更不要）
+    # Legacy form (no id_counters): initialize from current maxima (backward
+    # compatible; ss_seed.json needs no change)
     _ensure_id_counters(ss)
     return ss
 
@@ -210,11 +216,12 @@ def _to_json(ss: dict[str, Any]) -> dict[str, Any]:
 
 
 def dump_topology(topology: dict[str, Any]) -> dict[str, Any]:
-    """具体トポロジー（タプルキー arcs）を JSON 化可能な dict に変換する。
+    """Convert a concrete topology (tuple-keyed arcs) into a JSON-serializable dict.
 
-    プロセス境界（subprocess_evaluator → aspen_worker）でトポロジーを渡すための
-    直列化。SS と違い iteration/history は持たない（具体トポロジーは {vertices, arcs, units}）。
-    arcs は from/to の数値順で安定ソート（_to_json と同じ規則）。
+    Serialization for passing a topology across the process boundary
+    (subprocess_evaluator -> aspen_worker). Unlike an SS it has no iteration/history
+    (a concrete topology is {vertices, arcs, units}).
+    arcs are stably sorted by the numeric parts of from/to (same rule as _to_json).
     """
     arc_keys = sorted(topology["arcs"], key=lambda k: (_vid_num(k[0]), _vid_num(k[1])))
     arcs_list = [
@@ -228,7 +235,7 @@ def dump_topology(topology: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_topology(raw: dict[str, Any]) -> dict[str, Any]:
-    """dump_topology の逆。list 形式 arcs をタプルキー dict に戻す。"""
+    """Inverse of dump_topology. Turns list-form arcs back into a tuple-keyed dict."""
     arcs: dict[tuple[str, str], dict[str, Any]] = {}
     for arc in raw.get("arcs", []):
         frm = arc["from"]
@@ -250,19 +257,20 @@ def active_topology(
     ss: dict[str, Any],
     q_active: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """SS テンプレート + q の値 → 具体トポロジー（3辞書）。
+    """SS template + values of q -> concrete topology (three dicts).
 
     Parameters
     ----------
-    ss : SS テンプレート（candidate アークを含み得る）。
-    q_active : 候補ラベル → 0/1 の辞書。未指定の候補は 0 とみなす。
+    ss : SS template (may contain candidate arcs).
+    q_active : dict mapping candidate label -> 0/1. Unspecified candidates count as 0.
 
     Returns
     -------
     {"vertices": {...}, "arcs": {...}, "units": {...}}
-        具体トポロジー。arcs から `candidate` キーは外す（解決済み）。
-        候補アーク OFF で給餌の消えた unit は `_prune_dead_units` が刈り取るので、
-        返るトポロジーは「q のもとで実際に建つもの」と一致する。
+        The concrete topology. The `candidate` key is stripped from arcs (resolved).
+        Units left without feed because a candidate arc is OFF are pruned by
+        `_prune_dead_units`, so the returned topology matches "what actually gets
+        built under this q".
     """
     q_active = q_active or {}
     vertices = copy.deepcopy(ss["vertices"])
@@ -280,9 +288,10 @@ def active_topology(
     severed = _prune_dead_units(vertices, arcs, units)
     topo: dict[str, Any] = {"vertices": vertices, "arcs": arcs, "units": units}
     if severed:
-        # pruning が「生きた流れ」の行き先を巻き添え削除した（例: dead unit の outlet 頂点へ
-        # 向かうリサイクル候補が ON）。この q 組合せは遺伝子型と実構造が食い違うため、
-        # is_buildable が理由付きで弾けるようマークして返す（GA/BO は BAD_VALUE 経路に落とす）。
+        # Pruning removed the destination of a "live" stream as collateral (e.g. a
+        # recycle candidate into a dead unit's outlet vertex is ON). For this q the
+        # genotype and the actual structure disagree, so mark it and let is_buildable
+        # reject it with a reason (GA/BO then take the BAD_VALUE path).
         topo["pruning_severed"] = severed
     return topo
 
@@ -292,38 +301,49 @@ def _prune_dead_units(
     arcs: dict[tuple[str, str], dict[str, Any]],
     units: dict[str, Any],
 ) -> list[tuple[str, str]]:
-    """給餌の消えた unit を fixpoint まで連鎖除去する（具体トポロジーを in-place で刈る）。
+    """Cascade-remove units that lost their feed, to a fixpoint (prunes the concrete
+    topology in place).
 
-    候補アーク（バイパストグル等）を OFF にすると膜 inlet への給餌が消える。その膜は
-    実際には建たないので、具体トポロジーから取り除いて「膜オフ＝クリーンな下位構造」に
-    する。これにより GA は「膜あり ⇄ 膜なし」を公平に評価できる（給餌ゼロ膜が常に
-    ペナルティ域に落ちるのを防ぐ）。
+    Turning a candidate arc OFF (e.g. a bypass toggle) removes the feed to a membrane
+    inlet. Such a membrane is not actually built, so it is removed from the concrete
+    topology to give a clean "membrane-off" sub-structure. This lets the GA compare
+    "with membrane" vs "without membrane" fairly (it prevents a zero-feed membrane
+    from always landing in the penalty region).
 
-    発火条件: unit の inlet が feed から到達不能（入次数0 を包含する）。
-        入次数だけを見ると「給餌 OFF ＋ 自ユニット下流からのリサイクル ON」で
-        feed から切り離された自己循環の島（流量ゼロの膜）が刈り残され、そのまま
-        Aspen に渡って評価を浪費する。到達性で判定することでこの島も刈れる。
-        feed 頂点が無い（テスト用等の）トポロジーでは旧来の入次数0 判定に落とす。
-    除去内容:
-        - その unit を units から削除（auto_vps が対応 VP を生成しなくなる＝自動連動）
-        - 各 outlet 頂点を、それに触れる全アークごと削除（delete_unit の流出処理と同形。
-          膜の permeate/retentate 所有アークもここで消える）
-        - inlet 始点に残る所有アークも削除（冗長だが防御的）
-        - role=internal かつ in==out==0 の孤立頂点を掃除（validate 項目7 と同定義）
+    Trigger: the unit's inlet is unreachable from feed (this subsumes in-degree 0).
+        Looking at in-degree alone would leave behind a self-circulating island cut
+        off from feed ("feed OFF + recycle ON from downstream of the unit itself":
+        a zero-flow membrane), which would then be passed to Aspen and waste an
+        evaluation. Using reachability prunes those islands too.
+        For topologies without a feed vertex (e.g. in tests) it falls back to the
+        old in-degree-0 test.
+    What is removed:
+        - the unit itself from units (auto_vps then stops generating its VP: automatic
+          coupling)
+        - each outlet vertex, together with every arc touching it (same shape as the
+          outflow handling in delete_unit; the membrane's owned permeate/retentate arcs
+          disappear here too)
+        - any owned arcs still starting at the inlet (redundant but defensive)
+        - isolated vertices with role=internal and in==out==0 (same definition as
+          validate item 7)
 
-    出口頂点の除去で下流 unit の inlet が入次数0 になり得るため、変化が無くなるまで反復する
-    （直列膜 MEMB2→MEMB3 で MEMB2 を消すと MEMB3 も次パスで dead 化）。
+    Removing outlet vertices can drive a downstream unit's inlet to in-degree 0, so the
+    loop repeats until nothing changes (with membranes in series MEMB2->MEMB3, removing
+    MEMB2 makes MEMB3 dead on the next pass).
 
-    残渣振替はしない: 発火条件が「給餌なし」なので振替対象が存在しない（流入のある
-    生きた unit を消す delete_unit とは別物）。feed/product/residue 頂点は決して消さない。
+    No residue rerouting: the trigger is "no feed", so there is nothing to reroute (this
+    is different from delete_unit, which removes a live unit that has inflow).
+    feed/product/residue vertices are never removed.
 
     Returns
     -------
     list[tuple[str, str]]
-        「巻き添え切断」されたアークのリスト。dead unit の outlet 頂点へ向かっていた
-        第三者アーク（unit 非所有）のうち、源頂点が最終トポロジーに生き残っているもの。
-        空でなければ「遺伝子型はその接続 ON なのに実構造には存在しない」食い違いであり、
-        呼び出し側（active_topology → is_buildable）が BAD 経路に落とす。
+        The list of arcs "severed as collateral": third-party arcs (not owned by the
+        unit) that pointed into a dead unit's outlet vertex and whose source vertex
+        survives in the final topology.
+        A non-empty list means "the genotype has that connection ON but it does not
+        exist in the actual structure", and the caller (active_topology ->
+        is_buildable) sends it down the BAD path.
     """
     severed: list[tuple[str, str]] = []
     feed_vids = [v for v, d in vertices.items() if d.get("role") == "feed"]
@@ -346,23 +366,23 @@ def _prune_dead_units(
                 dead = in_deg.get(inlet, 0) == 0
             if not dead:
                 continue
-            # dead unit を刈る
+            # Prune the dead unit
             del units[name]
-            # 流出側: outlet 頂点とそれに触れる全アーク（delete_unit と同形）
+            # Outflow side: outlet vertices and every arc touching them (same as delete_unit)
             for ov in (u.get("outlets") or {}).values():
                 for k in [k for k in arcs if ov in k]:
-                    # 第三者からの流入（この unit の所有アークでない到着アーク）は
-                    # 「生きた流れの切断」候補として記録する
+                    # Inflow from a third party (an incoming arc not owned by this unit)
+                    # is recorded as a candidate "severed live stream"
                     if k[1] == ov and arcs[k].get("unit") != name:
                         severed.append(k)
                     del arcs[k]
                 vertices.pop(ov, None)
-            # inlet 始点に残る所有アーク（冗長だが防御的）
+            # Owned arcs still starting at the inlet (redundant but defensive)
             for k in [k for k in arcs if k[0] == inlet]:
                 del arcs[k]
             changed = True
 
-        # 孤立 internal 頂点の掃除（in==out==0、feed/sink は対象外）
+        # Clean up isolated internal vertices (in==out==0; feed/sink are excluded)
         in_deg2 = {v: 0 for v in vertices}
         out_deg2 = {v: 0 for v in vertices}
         for (frm, to) in arcs:
@@ -378,39 +398,45 @@ def _prune_dead_units(
             del vertices[v]
             changed = True
 
-    # 源頂点ごと消えた切断（島の内部アーク等）は「生きた流れ」ではないので除外
+    # Severed arcs whose source vertex also disappeared (internal arcs of an island,
+    # etc.) were not "live streams", so drop them
     return [k for k in severed if k[0] in vertices]
 
 
 def is_buildable(topology: dict[str, Any]) -> str | None:
-    """具体トポロジー（q 解決後）が aspen_builder でビルド可能かを判定する純関数。
+    """Pure function deciding whether a concrete topology (after q resolution) can be
+    built by aspen_builder.
 
-    ビルド不能なら理由文字列、ビルド可能なら None を返す（Aspen 不要・副作用なし）。
+    Returns a reason string if it is unbuildable, None if it is buildable
+    (no Aspen needed, no side effects).
 
-    検査するのは**非膜の分流のみ**：
-        builder は膜以外の分流（スプリッタ）を作れない（FSplit は未実装）ため、
-        非膜頂点の out 次数 >1 を弾く。多出力が許されるのは複数出口を持つユニット
-        （現状は膜）の inlet のときだけで、そのとき out 次数＝ユニットの出口数
-        （len(outlets)）かつ全出アークが当該ユニット所有（meta["unit"]==unit名）
-        であることを要求する。
+    Only **non-membrane splits** are checked:
+        The builder cannot create a non-membrane split (splitter; FSplit is not
+        implemented), so out-degree >1 on a non-membrane vertex is rejected. Multiple
+        outputs are allowed only at the inlet of a unit with multiple outlets
+        (currently membranes), and there the out-degree must equal the unit's number of
+        outlets (len(outlets)) and every outgoing arc must be owned by that unit
+        (meta["unit"] == unit name).
 
-    検査しないもの：
-        - 行き止まり：builder が terminal（ストリーム未生成）／未測定出力として
-          処理するためビルド可能。ここでは弾かない。
-        - in 次数の合流：builder が Mixer を自動生成するためビルド可能。
+    Not checked:
+        - Dead ends: the builder handles them as terminals (no stream generated) or
+          unmeasured outputs, so they are buildable and are not rejected here.
+        - Merging in-degree: the builder auto-generates a Mixer, so it is buildable.
 
-    `validate` には足さない：SS テンプレは相互排他な候補ペアで out 次数2でも正常
-    であり、本関数は q 解決後の具体トポロジーにのみ効く（層が異なる）。
+    Not added to `validate`: an SS template legitimately has out-degree 2 from a
+    mutually exclusive candidate pair, and this function applies only to the concrete
+    topology after q resolution (a different layer).
     """
-    # pruning が生きた流れを巻き添え切断した q 組合せ（active_topology がマークする）。
-    # 遺伝子型（例: リサイクル ON）と実構造が食い違うため、評価せず BAD で弾く。
+    # q combinations where pruning severed a live stream as collateral (marked by
+    # active_topology). The genotype (e.g. recycle ON) and the actual structure
+    # disagree, so reject as BAD without evaluating.
     severed = topology.get("pruning_severed")
     if severed:
         return f"pruning severed live arc(s) into removed unit outlet: {severed}"
 
     arcs = topology["arcs"]
     units = topology["units"]
-    # ユニット inlet → (ユニット名, 出口数)
+    # unit inlet -> (unit name, number of outlets)
     inlet_of = {u["inlet"]: (name, len(u["outlets"])) for name, u in units.items()}
 
     for v in topology["vertices"]:
@@ -434,35 +460,39 @@ def is_buildable(topology: dict[str, Any]) -> str | None:
 # =========================================================
 
 def validate(topology: dict[str, Any]) -> None:
-    """SS テンプレートまたは具体トポロジーの妥当性検査。
+    """Validity check for an SS template or a concrete topology.
 
-    違反があれば TopologyError を raise する。引数は SS でも具体トポロジー
-    でもよい（candidate キーは無視して全アークを最大グラフとして扱う）。
+    Raises TopologyError on any violation. The argument may be either an SS or a
+    concrete topology (the candidate key is ignored and all arcs are treated as the
+    maximal graph).
 
-    検査項目:
-        1. 全アークの endpoint が vertices に存在・自己ループ (from==to) 禁止
-        2. アークの unit (あれば) が units に存在
-        2b. candidate ラベルは "q_<int>" 形式かつ SS 内で一意
-        3. unit 所有権:
-           - inlet / outlets[*] 頂点が存在
-           - inlet→各 outlet の所有アークが実在し unit タグが一致（実体の完全性）
-           - unit タグ付きアークは必ずその unit の inlet→outlet 対（誤タグ禁止）
-           - 所有アークは candidate 化不可（装置の内部構造は q で消えない）
-           - inlet 頂点・outlet 頂点は unit 間で共有不可（同ロール間のみ。
-             「A の outlet ＝ B の inlet」の直列連結は正常なので許す）
-        4. role=feed の入次数 == 0
-        5. role=product/residue の出次数 == 0
-        6. feed → product の到達可能性（少なくとも1経路）
-        7. 役割なし内部頂点で入次数+出次数 == 0 は孤立として禁止
-        8. feed から到達可能な internal 頂点は何らかの sink にも到達可能
-           （孤立部分グラフ・行き止まりを禁止）
-        9. 不明な role を持つ頂点はない
+    Checks:
+        1. Every arc endpoint exists in vertices; self-loops (from==to) are forbidden
+        2. An arc's unit (if any) exists in units
+        2b. Candidate labels have the form "q_<int>" and are unique within the SS
+        3. Unit ownership:
+           - the inlet / outlets[*] vertices exist
+           - the owned arc inlet->each outlet exists and its unit tag matches
+             (structural integrity of the unit)
+           - a unit-tagged arc must be an inlet->outlet pair of that unit (no mistagging)
+           - owned arcs cannot be candidates (a unit's internal structure never
+             disappears with q)
+           - inlet and outlet vertices cannot be shared between units (within the same
+             role only; series connection "A's outlet == B's inlet" is legitimate and
+             therefore allowed)
+        4. In-degree of role=feed == 0
+        5. Out-degree of role=product/residue == 0
+        6. Reachability feed -> product (at least one path)
+        7. An internal vertex with in-degree + out-degree == 0 is forbidden as isolated
+        8. Every internal vertex reachable from feed can also reach some sink
+           (forbids disconnected subgraphs and dead ends)
+        9. No vertex has an unknown role
     """
     vertices = topology["vertices"]
     arcs = topology["arcs"]
     units = topology.get("units", {})
 
-    # 1. endpoint + 自己ループ禁止
+    # 1. endpoints + no self-loops
     for (frm, to) in arcs:
         if frm not in vertices:
             raise TopologyError(f"arc references unknown vertex from={frm!r}")
@@ -471,24 +501,25 @@ def validate(topology: dict[str, Any]) -> None:
         if frm == to:
             raise TopologyError(f"self-loop arc {frm!r}->{to!r} is not allowed")
 
-    # 2. arc.unit が units にある
+    # 2. arc.unit exists in units
     for key, meta in arcs.items():
         u = meta.get("unit")
         if u is not None and u not in units:
             raise TopologyError(f"arc {key} references unknown unit {u!r}")
 
-    # 2b. candidate ラベルの形式・一意性（binary_variables まで遅延させず最終ゲートで弾く）
+    # 2b. Candidate label format/uniqueness (rejected at the final gate rather than
+    # deferred to binary_variables)
     seen_cands: set[str] = set()
     for key, meta in arcs.items():
         cand = meta.get("candidate")
         if cand is None:
             continue
-        _qid_num(cand)  # 形式不正なら TopologyError
+        _qid_num(cand)  # raises TopologyError if the format is invalid
         if cand in seen_cands:
             raise TopologyError(f"duplicate candidate label {cand!r}")
         seen_cands.add(cand)
 
-    # 3. unit 所有権（頂点の存在＋所有アークの実体＋同ロール間の排他性）
+    # 3. Unit ownership (vertex existence + owned arcs exist + exclusivity within a role)
     inlet_owner: dict[str, str] = {}
     outlet_owner: dict[str, str] = {}
     for uname, udef in units.items():
@@ -516,7 +547,7 @@ def validate(topology: dict[str, Any]) -> None:
             if owned is None:
                 raise TopologyError(
                     f"unit {uname!r} missing owned arc {(inlet, vid)} "
-                    f"(port {port!r}) — unit structure is broken"
+                    f"(port {port!r}) - unit structure is broken"
                 )
             if owned.get("unit") != uname:
                 raise TopologyError(
@@ -527,18 +558,18 @@ def validate(topology: dict[str, Any]) -> None:
                 raise TopologyError(
                     f"owned arc {(inlet, vid)} of unit {uname!r} must not be a candidate"
                 )
-    # unit タグ付きアークは必ずその unit の inlet→outlet 対
+    # A unit-tagged arc must be an inlet->outlet pair of that unit
     for key, meta in arcs.items():
         u = meta.get("unit")
         if u is None:
             continue
-        udef = units[u]  # 存在は検査2で保証済み
+        udef = units[u]  # existence guaranteed by check 2
         if key[0] != udef.get("inlet") or key[1] not in (udef.get("outlets") or {}).values():
             raise TopologyError(
-                f"arc {key} is tagged unit={u!r} but is not an inlet→outlet arc of it"
+                f"arc {key} is tagged unit={u!r} but is not an inlet->outlet arc of it"
             )
 
-    # 4-5. role と次数
+    # 4-5. Roles and degrees
     in_deg, out_deg = _degree(vertices, arcs)
     known_roles = SourceRoles | SinkRoles | {"internal"}
     for vid, vdef in vertices.items():
@@ -550,7 +581,7 @@ def validate(topology: dict[str, Any]) -> None:
         if role in SinkRoles and out_deg[vid] != 0:
             raise TopologyError(f"sink vertex {vid!r} (role={role}) has outgoing arc")
 
-    # 6. feed → product 到達可能性
+    # 6. feed -> product reachability
     feed_vids = [v for v, d in vertices.items() if d.get("role") == "feed"]
     product_vids = [v for v, d in vertices.items() if d.get("role") == "product"]
     sink_vids = [v for v, d in vertices.items() if d.get("role") in SinkRoles]
@@ -560,16 +591,16 @@ def validate(topology: dict[str, Any]) -> None:
         reachable_from_feed = _reachable_from(feed_vids, arcs, vertices)
     if feed_vids and product_vids:
         if not any(p in reachable_from_feed for p in product_vids):
-            raise TopologyError("no feed→product path exists")
+            raise TopologyError("no feed->product path exists")
 
-    # 7. 孤立 internal 頂点
+    # 7. Isolated internal vertices
     for vid, vdef in vertices.items():
         if vdef.get("role") != "internal":
             continue
         if in_deg[vid] == 0 and out_deg[vid] == 0:
             raise TopologyError(f"isolated internal vertex {vid!r} (no in/out arcs)")
 
-    # 8. feed から到達可能な internal 頂点はいずれかの sink にも到達可能
+    # 8. Every internal vertex reachable from feed can also reach some sink
     if feed_vids and sink_vids:
         reachable_to_sink = _reachable_to(sink_vids, arcs, vertices)
         for vid in reachable_from_feed:
@@ -620,7 +651,7 @@ def _reachable_to(
     arcs: dict[tuple[str, str], dict[str, Any]],
     vertices: dict[str, Any],
 ) -> set[str]:
-    """逆方向到達: targets のいずれかへ到達できる頂点の集合。"""
+    """Reverse reachability: the set of vertices that can reach any of targets."""
     radj: dict[str, set[str]] = {v: set() for v in vertices}
     for (frm, to) in arcs:
         if to in radj:
@@ -637,23 +668,27 @@ def _reachable_to(
 
 
 # =========================================================
-# 補助ユニットの自動導出（具体トポロジーに対して使う）
+# Automatic derivation of auxiliary units (applied to a concrete topology)
 # =========================================================
 
 def mixer_vertices(topology: dict[str, Any]) -> set[str]:
-    """Mixer を置くべき頂点集合。
+    """The set of vertices where a Mixer must be placed.
 
-    規則:
-        (1) 膜アーク（membrane_permeate / membrane_retentate）の src 頂点
-        (2) 入次数 2 以上の頂点
-        (3) sink (role=product/residue) 頂点（測定点確保のためストリーム化する）
-        (4) 素通しアーク（unit を持たない feed/process/recycle）で給餌される
-            ユニット入口頂点（2026-07-14）。builder は素通しアークを
-            「行き先 Mixer の F(IN) 登録」としてしか配線しないため、Mixer 化しないと
-            入口ストリームを誰も生成せず孤立する（feed→合流点→COMP の pre-mixer
-            配置や、add_gated_unit の非膜ユニットが該当。膜入口は (1) で既に Mixer、
-            ユニット出口直結の入口は unit アーク給餌なので対象外＝既存配線は不変）。
-            単入力 Mixer は Aspen 上無害で、リサイクル追加時は自然に多入力になる。
+    Rules:
+        (1) The source vertex of a membrane arc (membrane_permeate / membrane_retentate)
+        (2) Any vertex with in-degree >= 2
+        (3) Sink vertices (role=product/residue) (turned into streams to secure a
+            measurement point)
+        (4) Unit inlet vertices fed by a pass-through arc (a feed/process/recycle arc
+            with no unit) (2026-07-14). The builder wires a pass-through arc only as an
+            "F(IN) registration on the destination Mixer", so without a Mixer nobody
+            creates the inlet stream and it is left isolated (this covers the pre-mixer
+            placement feed->junction->COMP and non-membrane units from add_gated_unit;
+            membrane inlets are already Mixers via (1), and an inlet connected directly
+            to a unit outlet is fed by a unit arc and is out of scope, so existing
+            wiring is unchanged).
+            A single-input Mixer is harmless in Aspen, and it naturally becomes
+            multi-input when a recycle is added.
     """
     vertices = topology["vertices"]
     arcs = topology["arcs"]
@@ -683,7 +718,7 @@ def mixer_vertices(topology: dict[str, Any]) -> set[str]:
 
 
 def splitter_vertices(topology: dict[str, Any]) -> set[str]:
-    """Splitter を置くべき頂点集合（出次数 >= 2）。"""
+    """The set of vertices where a Splitter must be placed (out-degree >= 2)."""
     out_deg: dict[str, int] = {}
     for (frm, _) in topology["arcs"]:
         out_deg[frm] = out_deg.get(frm, 0) + 1
@@ -691,9 +726,9 @@ def splitter_vertices(topology: dict[str, Any]) -> set[str]:
 
 
 def auto_vps(topology: dict[str, Any]) -> dict[str, str]:
-    """MEMB ユニット名 → 対応する VP 名のマップ。
+    """Map from MEMB unit name -> the corresponding VP name.
 
-    VP{n} の n は MEMB{n} の数値部分をそのまま流用（欠番OK）。
+    The n in VP{n} reuses the numeric part of MEMB{n} as is (gaps are fine).
     """
     result: dict[str, str] = {}
     for uname, udef in topology["units"].items():
@@ -709,14 +744,14 @@ def auto_vps(topology: dict[str, Any]) -> dict[str, str]:
 
 
 # =========================================================
-# 変数導出（GA 染色体の組み立てに使う）
+# Variable derivation (used to assemble the GA chromosome)
 # =========================================================
 
 def binary_variables(ss: dict[str, Any]) -> list[dict[str, Any]]:
-    """SS テンプレートの candidate アークからバイナリ変数リストを導出。
+    """Derive the list of binary variables from the candidate arcs of an SS template.
 
-    各要素: {"name": "q_k", "arc": (frm, to), "type": str|None, "unit": str|None}。
-    並びは q ラベルの数値部分昇順（決定論的）。
+    Each element: {"name": "q_k", "arc": (frm, to), "type": str|None, "unit": str|None}.
+    The order is ascending in the numeric part of the q label (deterministic).
     """
     seen: dict[str, dict[str, Any]] = {}
     for (frm, to), meta in ss["arcs"].items():
@@ -738,18 +773,20 @@ def continuous_variables(
     ss: dict[str, Any],
     membrane_model: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """SS テンプレートの units から連続変数リストを導出。
+    """Derive the list of continuous variables from the units of an SS template.
 
-    並び:
-        - 外側は units の挿入順
-        - 各ユニット内は unit_registry の宣言順
-        - membrane_model（12.1）が tie モードのときは共有 permeance 変数
-          `MEMB_perm`（unit_param=["MEMB*", "permeance_CO2"]）を**先頭**に置く。
-          先頭固定なのは、pruning 後トポロジーとの位置整列（x_for_topology）を
-          膜の生存パターンに依らず保つため。段別（tie=False）は各 MEMB の変数列に
-          `{unit}_perm` が付く（unit_registry.make_ga_variables）。
-    各ユニットの bounds_override は make_ga_variables 内で UNIT_BOUNDS より優先される。
-    membrane_model=None は従来どおり（permeance は params の固定値）。
+    Order:
+        - Outer: the insertion order of units
+        - Within each unit: the declaration order in unit_registry
+        - When membrane_model (12.1) is in tie mode, the shared permeance variable
+          `MEMB_perm` (unit_param=["MEMB*", "permeance_CO2"]) is placed **first**.
+          It is pinned first so that positional alignment with the post-pruning
+          topology (x_for_topology) is preserved regardless of which membranes
+          survive. In per-stage mode (tie=False), each MEMB's variable list gets a
+          `{unit}_perm` instead (unit_registry.make_ga_variables).
+    Each unit's bounds_override takes precedence over UNIT_BOUNDS inside
+    make_ga_variables.
+    membrane_model=None behaves as before (permeance is a fixed value in params).
     """
     result: list[dict[str, Any]] = []
     units = ss.get("units", {})
@@ -769,10 +806,11 @@ def continuous_variables(
 
 
 def _cv_in_topology(cv: dict[str, Any], units: dict[str, Any]) -> bool:
-    """連続変数エントリが具体トポロジー（units）に対して有効かの共通述語。
+    """Shared predicate for whether a continuous-variable entry is valid for a concrete
+    topology (units).
 
-    unit 名が "*" で終わるエントリ（例 "MEMB*"＝tie された膜共有変数）は、その
-    プレフィクスを持つユニットが1つでも残っていれば有効。
+    An entry whose unit name ends in "*" (e.g. "MEMB*" = the tied shared membrane
+    variable) is valid as long as at least one unit with that prefix remains.
     """
     uname = cv["unit_param"][0]
     if uname.endswith("*"):
@@ -785,11 +823,13 @@ def cont_vars_for_topology(
     cont_vars: list[dict[str, Any]],
     topology: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """テンプレート由来の連続変数リストを、具体トポロジーに存在する変数だけに絞る。
+    """Restrict a template-derived continuous-variable list to the variables that exist
+    in a concrete topology.
 
-    `x_for_topology` と同じ述語・同じ順序で cv エントリ側を絞る（値と名前の対応が
-    ずれないよう、必ず両者をセットで使う）。results.json の optimal_params から
-    pruned ユニットの「評価に影響しない自由次元」を除外する用途（幽霊シグナル防止）。
+    It filters the cv entries with the same predicate and the same order as
+    `x_for_topology` (always use the two together so that values and names stay
+    aligned). Used to exclude "free dimensions that do not affect the evaluation" of
+    pruned units from optimal_params in results.json (preventing phantom signals).
     """
     units = topology.get("units", {})
     return [cv for cv in cont_vars if _cv_in_topology(cv, units)]
@@ -800,16 +840,19 @@ def x_for_topology(
     cont_vars: list[dict[str, Any]],
     topology: dict[str, Any],
 ) -> list[float]:
-    """テンプレート次元の連続値ベクトルを、具体トポロジーに存在する変数だけに絞る。
+    """Restrict a template-dimension continuous value vector to the variables that exist
+    in a concrete topology.
 
-    optimizer（ga/bo/run_iteration）はテンプレート ss 由来の全連続変数の x を持つが、
-    evaluator は具体トポロジー（dead-unit pruning 後）の `continuous_variables` と
-    **位置 zip** する。pruning で「途中の」ユニットが消えると位置がずれ、後続ユニットに
-    前のユニットの値が書き込まれる（gated unit が2つ以上あり片方だけ prune された場合に
-    顕在化する整列バグ）。テンプレート順を保ったままトポロジー非存在ユニットの値を
-    落とすことで、evaluator 側の zip と 1:1 に揃える。
+    The optimizer (ga/bo/run_iteration) carries an x over all continuous variables
+    derived from the template ss, but the evaluator **zips positionally** with the
+    `continuous_variables` of the concrete topology (after dead-unit pruning). If
+    pruning removes a unit "in the middle", the positions shift and a preceding unit's
+    value is written into a later unit (an alignment bug that shows up when there are
+    two or more gated units and only one of them is pruned). Dropping the values of
+    units absent from the topology while preserving the template order lines this up
+    1:1 with the evaluator's zip.
 
-    述語は `_cv_in_topology`（cont_vars_for_topology と共通）。
+    The predicate is `_cv_in_topology` (shared with cont_vars_for_topology).
     """
     units = topology.get("units", {})
     return [
@@ -820,20 +863,20 @@ def x_for_topology(
 
 
 # =========================================================
-# 隣接行列（論文用）
+# Adjacency matrix (for the paper)
 # =========================================================
 
 def to_matrix(topology: dict[str, Any]):
-    """(adjacency_matrix, vertex_order) を返す。論文用。
+    """Return (adjacency_matrix, vertex_order). For the paper.
 
-    値の意味:
-        0    : アークなし
-        1    : 固定アーク
-        "q_k": 候補アーク（candidate ラベル）
+    Meaning of the values:
+        0    : no arc
+        1    : fixed arc
+        "q_k": candidate arc (candidate label)
 
-    vertex_order は vertices の挿入順（文字列ID → 行/列インデックス）。
+    vertex_order is the insertion order of vertices (string ID -> row/column index).
     """
-    import numpy as np  # 論文用のみ。通常パスでは読み込まない
+    import numpy as np  # For the paper only; not loaded on the normal path
     vertex_order = list(topology["vertices"])
     idx = {v: i for i, v in enumerate(vertex_order)}
     n = len(vertex_order)

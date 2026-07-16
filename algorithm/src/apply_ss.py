@@ -1,22 +1,27 @@
-"""ss_change.json（ユニット単位の差分）を読み、ss_current.json を更新する。
+"""Read ss_change.json (a unit-level diff) and update ss_current.json.
 
-操作（ARCHITECTURE 6.2）:
-    add_unit          : ユニット追加（固定。出力頂点を STRUCTURE_TEMPLATES から決定論的に採番）
-    add_gated_unit    : ユニットを GA トグルとして追加（給餌をバイパス候補化＝engagement を
-                        バイナリ変数に。OFF 時は active_topology の pruning が刈り取る。6.2）
-    delete_unit       : ユニット削除（流入は residue へ振替、流出は削除。6.3）
-    add_arc           : アーク追加（candidate:true で q_k を自動採番）
-    delete_arc        : アーク1本削除（unit 所有アークは拒否、delete_unit を使う。6.2）
-    promote_candidate : 候補→固定アーク昇格（candidate キーを除去）
-    set_bounds        : 連続変数の境界を units[name].bounds_override に保存
+Operations (ARCHITECTURE 6.2):
+    add_unit          : add a unit (always engaged; outlet vertices are numbered
+                        deterministically from STRUCTURE_TEMPLATES)
+    add_gated_unit    : add a unit as a GA toggle (the feed becomes a bypass
+                        candidate, i.e. engagement becomes a binary variable.
+                        When OFF, active_topology prunes the unit away. 6.2)
+    delete_unit       : delete a unit (inflows are rerouted to residue, outflows
+                        are removed. 6.3)
+    add_arc           : add an arc (candidate:true auto-numbers q_k)
+    delete_arc        : delete a single arc (unit-owned arcs are rejected; use
+                        delete_unit instead. 6.2)
+    promote_candidate : promote a candidate to a fixed arc (drop the candidate key)
+    set_bounds        : store continuous-variable bounds in units[name].bounds_override
 
 CLI:
     uv run python algorithm/src/apply_ss.py --base-dir runs/runN --iter N
-    → <base>/iterations/iter_NNN/ss_change.json を <base>/ss_current.json に適用
+    -> applies <base>/iterations/iter_NNN/ss_change.json to <base>/ss_current.json
 
-退避と検証（ARCHITECTURE 6.2.1 / 7節）:
-    - 適用前に必ず ss_current.json を iter_NNN/ss_before_change.json に退避する
-    - 適用後 topology.validate を呼び、違反時は例外で停止し ss_current.json を更新しない
+Backup and validation (ARCHITECTURE 6.2.1 / section 7):
+    - ss_current.json is always backed up to iter_NNN/ss_before_change.json before applying
+    - topology.validate runs after applying; on violation it raises and ss_current.json
+      is left untouched
 """
 
 from __future__ import annotations
@@ -35,26 +40,27 @@ from topology import allocate_candidate_id, allocate_vertex_id  # noqa: E402
 from unit_registry import STRUCTURE_TEMPLATES, UNIT_BOUNDS, get_outlet_ports  # noqa: E402
 
 
-# ユニット種別ごとの「内部アーク」型（inlet→outlet 頂点間のアーク）。
-# 既定は "process"。MEMB と COMP は語彙3.6に従う。
+# "Inner arc" type per unit type (the arc from the inlet to an outlet vertex).
+# Defaults to "process". MEMB and COMP follow the vocabulary in 3.6.
 INNER_ARC_TYPE: dict[str, dict[str, str]] = {
     "MEMB": {"permeate": "membrane_permeate", "retentate": "membrane_retentate"},
     "COMP": {"outlet": "compressor"},
-    "EXP":  {"outlet": "expander"},   # 膨張機（ver3 12.4）
-    "HEAT": {"outlet": "heater"},     # 冷却器/加熱器（ver3 12.4 検算で追加）
+    "EXP":  {"outlet": "expander"},   # expander (ver3 12.4)
+    "HEAT": {"outlet": "heater"},     # cooler/heater (added during the ver3 12.4 cross-check)
 }
 
 
 class ApplyError(ValueError):
-    """ss_change の適用中に検出した不整合。"""
+    """An inconsistency detected while applying an ss_change."""
 
 
 def _enforce_fixed_params(unit_type: str, unit: str, params: dict[str, Any]) -> None:
-    """固定パラメータ（UNIT_BOUNDS で lo==hi）の強制（2026-07-15）。
+    """Enforce fixed parameters (lo==hi in UNIT_BOUNDS) (2026-07-15).
 
-    lo==hi のパラメータは GA/BO 変数にならず params の値がそのまま実機に効くため、
-    提案側が別の値を書くと campaign 定義（例: ブロワー=1.1 bar 固定）をすり抜ける。
-    未指定なら固定値を自動補完し、異なる値は明示エラーで拒否する。
+    Parameters with lo==hi never become GA/BO variables, so the value in params is
+    what actually reaches the simulation; a proposal writing a different value would
+    slip past the campaign definition (e.g. blower fixed at 1.1 bar). Fill in the
+    fixed value when unspecified, and reject any differing value explicitly.
     """
     for param, (lo, hi) in UNIT_BOUNDS.get(unit_type, {}).items():
         if lo != hi:
@@ -64,13 +70,13 @@ def _enforce_fixed_params(unit_type: str, unit: str, params: dict[str, Any]) -> 
             params[param] = lo
         elif float(given) != float(lo):
             raise ApplyError(
-                f"{unit}: {param}={given} は固定値 {lo} 以外を取れない"
-                f"（UNIT_BOUNDS が lo==hi＝campaign で固定されたパラメータ）"
+                f"{unit}: {param}={given} cannot differ from the fixed value {lo} "
+                f"(UNIT_BOUNDS has lo==hi, i.e. the parameter is fixed by the campaign)"
             )
 
 
 # =========================================================
-# 操作ハンドラ
+# Operation handlers
 # =========================================================
 
 def op_add_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
@@ -90,7 +96,7 @@ def op_add_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
     ports = get_outlet_ports(unit_type)
     inner_map = INNER_ARC_TYPE.get(unit_type, {})
 
-    # 各 outlet ポートの接続先（{port}_to）を取得
+    # Get the destination ({port}_to) of each outlet port
     port_to: dict[str, str] = {}
     for port in ports:
         key = f"{port}_to"
@@ -101,7 +107,7 @@ def op_add_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
             raise ApplyError(f"{key}={target!r} not in vertices")
         port_to[port] = target
 
-    # 出力頂点を採番（STRUCTURE_TEMPLATES のポート順で決定論的）
+    # Number the outlet vertices (deterministic, in STRUCTURE_TEMPLATES port order)
     outlets: dict[str, str] = {}
     for port in ports:
         new_v = allocate_vertex_id(ss)
@@ -111,9 +117,10 @@ def op_add_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
         }
         outlets[port] = new_v
 
-    # アーク追加（内部アーク＋後段アーク）。既存直結 (inlet, port_to) があれば削除。
-    # ただし unit 所有アーク（他装置の内部構造）や candidate（バイナリ変数）を
-    # 黙って壊すことは許さない（明示的な delete_unit / delete_arc を要求する）。
+    # Add arcs (inner arc + downstream arc). Remove an existing direct (inlet, port_to)
+    # arc if present. However, silently breaking a unit-owned arc (another unit's
+    # internal structure) or a candidate (a binary variable) is not allowed: an
+    # explicit delete_unit / delete_arc is required.
     for port in ports:
         outlet_v = outlets[port]
         downstream = port_to[port]
@@ -155,25 +162,28 @@ def op_add_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
 
 
 def op_add_gated_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
-    """ユニットを「GA が on/off を決めるトグル」として追加する（構造を GA 変数に）。
+    """Add a unit as a toggle whose on/off state is decided by the GA (structure as a GA variable).
 
-    `add_unit` が固定追加（ユニットが常に engaged）なのに対し、本オペは engagement を
-    バイナリ候補（q_k）に帰属させる。具体的には専用の新インレット頂点を作り、その給餌を
-    候補アークにする。給餌候補 OFF → インレット入次数0 → `active_topology` の
-    dead-unit pruning がユニットを刈り取る＝「ユニットなしのクリーン下位構造」。
+    Whereas `add_unit` adds a unit permanently (always engaged), this operation makes
+    engagement a binary candidate (q_k). Concretely, it creates a dedicated new inlet
+    vertex and turns the feed into that vertex into a candidate arc. Feed candidate OFF
+    -> inlet in-degree 0 -> the dead-unit pruning in `active_topology` removes the unit,
+    giving a clean sub-structure without the unit.
 
-    展開（feed_from の流れを「ユニットへ ⇄ バイパス」のトグルペアに変える）:
-        - 新インレット頂点 Vin（role=internal）を採番
-        - 出力頂点を STRUCTURE_TEMPLATES のポート順で採番
-        - 内部アーク Vin→outlet（固定・unit 所有）＋後段アーク outlet→{port}_to
-        - 給餌候補 (feed_from→Vin)（candidate q_a）
-        - バイパス候補 (feed_from→bypass_to)（candidate q_b）。既存の固定アークがあれば
-          型を引き継いで候補化（相互排他にする）。unit 所有アークなら拒否。
+    Expansion (turns the feed_from stream into a "to the unit <-> bypass" toggle pair):
+        - Allocate a new inlet vertex Vin (role=internal)
+        - Allocate outlet vertices in STRUCTURE_TEMPLATES port order
+        - Inner arcs Vin->outlet (fixed, unit-owned) plus downstream arcs outlet->{port}_to
+        - Feed candidate (feed_from->Vin) (candidate q_a)
+        - Bypass candidate (feed_from->bypass_to) (candidate q_b). If a fixed arc already
+          exists, its type is inherited and it becomes a candidate (mutually exclusive).
+          A unit-owned arc is rejected.
 
-    必須フィールド: unit_type / unit / feed_from / bypass_to / 各 {port}_to。
-    注意: feed_from は「インターセプトする1本の流れ」の源であること。feed_from に他の固定
-    出アークが残っていると候補 ON 時に出次数>1 で is_buildable が弾く（リサイクルのトグル
-    ペアと同じ規律。playbook 参照）。バイナリを2本消費する（max_binary_variables を自己点検）。
+    Required fields: unit_type / unit / feed_from / bypass_to / each {port}_to.
+    Note: feed_from must be the source of the single stream being intercepted. If any
+    other fixed outgoing arc remains at feed_from, out-degree > 1 when the candidate is
+    ON and is_buildable rejects it (the same discipline as recycle toggle pairs; see the
+    playbook). This consumes two binaries (check max_binary_variables yourself).
     """
     unit_type = op["unit_type"]
     unit = op["unit"]
@@ -194,7 +204,7 @@ def op_add_gated_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
     ports = get_outlet_ports(unit_type)
     inner_map = INNER_ARC_TYPE.get(unit_type, {})
 
-    # 各 outlet ポートの接続先（{port}_to）を取得
+    # Get the destination ({port}_to) of each outlet port
     port_to: dict[str, str] = {}
     for port in ports:
         key = f"{port}_to"
@@ -205,7 +215,7 @@ def op_add_gated_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
             raise ApplyError(f"{key}={target!r} not in vertices")
         port_to[port] = target
 
-    # バイパス候補の対象（feed_from→bypass_to）の事前チェック
+    # Pre-checks on the bypass candidate target (feed_from->bypass_to)
     bypass_key = (feed_from, bypass_to)
     existing_bypass = ss["arcs"].get(bypass_key)
     if existing_bypass is not None and existing_bypass.get("unit") is not None:
@@ -214,26 +224,27 @@ def op_add_gated_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
             f"choose a different feed_from/bypass_to"
         )
     if existing_bypass is not None and existing_bypass.get("candidate"):
-        # 既に候補のアークに重ねると既存 q ラベルが黙って消え、履歴追跡・
-        # promote_candidate の参照が壊れる。仕様外（6.2 は「固定アークの候補化」のみ）。
+        # Overlaying an already-candidate arc would silently drop the existing q label,
+        # breaking history tracking and promote_candidate references. Out of spec
+        # (6.2 only covers turning a fixed arc into a candidate).
         raise ApplyError(
             f"bypass arc {bypass_key} is already candidate "
             f"{existing_bypass['candidate']!r}; resolve the existing toggle first "
             f"(promote_candidate or delete_arc) before gating this stream"
         )
 
-    # 1. 新インレット頂点
+    # 1. New inlet vertex
     inlet = allocate_vertex_id(ss)
     ss["vertices"][inlet] = {"role": "internal", "label": f"{unit} inlet (gated)"}
 
-    # 2. 出力頂点を採番
+    # 2. Number the outlet vertices
     outlets: dict[str, str] = {}
     for port in ports:
         new_v = allocate_vertex_id(ss)
         ss["vertices"][new_v] = {"role": "internal", "label": f"{unit} {port} outlet"}
         outlets[port] = new_v
 
-    # 3. 内部アーク（固定・unit 所有）＋後段アーク
+    # 3. Inner arcs (fixed, unit-owned) plus downstream arcs
     for port in ports:
         outlet_v = outlets[port]
         downstream = port_to[port]
@@ -243,7 +254,7 @@ def op_add_gated_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
             raise ApplyError(f"arc {(outlet_v, downstream)} already exists")
         ss["arcs"][(outlet_v, downstream)] = {"type": "process"}
 
-    # 4. トグルペア：給餌候補 q_a → バイパス候補 q_b の順で採番（distinct）
+    # 4. Toggle pair: number the feed candidate q_a first, then the bypass candidate q_b (distinct)
     feed_key = (feed_from, inlet)
     if feed_key in ss["arcs"]:
         raise ApplyError(f"arc {feed_key} already exists")
@@ -255,7 +266,7 @@ def op_add_gated_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
         "candidate": allocate_candidate_id(ss),
     }
 
-    # 5. ユニット登録
+    # 5. Register the unit
     ss["units"][unit] = {
         "type": unit_type,
         "inlet": inlet,
@@ -274,7 +285,7 @@ def op_delete_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
     inlet_v = u["inlet"]
     outlet_vs = list(u["outlets"].values())
 
-    # 1. 流出側: outlet 頂点とそれに触れる全アークを削除
+    # 1. Outflow side: delete the outlet vertices and every arc touching them
     for ov in outlet_vs:
         keys = [k for k in ss["arcs"] if ov in k]
         for k in keys:
@@ -282,24 +293,24 @@ def op_delete_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
         if ov in ss["vertices"]:
             del ss["vertices"][ov]
 
-    # units 辞書から削除（以降の参照判定で除外するため先に消す）
+    # Remove from the units dict (done first so later reference checks exclude it)
     del ss["units"][unit]
 
-    # 2. inlet_v が他ユニットから参照されているか
+    # 2. Is inlet_v referenced by another unit?
     inlet_in_other_units = any(
         inlet_v == ud.get("inlet") or inlet_v in (ud.get("outlets") or {}).values()
         for ud in ss["units"].values()
     )
     if inlet_in_other_units:
-        # 生きた経路を壊さない（Q3）
+        # Do not break a live path (Q3)
         return
 
-    # 3. inlet_v にまだ outgoing アークが残っていれば触らない（生きた経路）
+    # 3. If inlet_v still has outgoing arcs, leave it alone (live path)
     outgoing = [k for k in ss["arcs"] if k[0] == inlet_v]
     if outgoing:
         return
 
-    # 4. 流入を residue へ振替
+    # 4. Reroute inflows to residue
     incoming = [k for k in ss["arcs"] if k[1] == inlet_v]
     if incoming:
         sink = _resolve_reroute_sink(ss, reroute_to_opt)
@@ -310,18 +321,18 @@ def op_delete_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
             new_meta["type"] = "residue"
             if (frm, sink) in ss["arcs"]:
                 raise ApplyError(
-                    f"cannot reroute {(frm, to)} → {(frm, sink)}: target arc already exists"
+                    f"cannot reroute {(frm, to)} -> {(frm, sink)}: target arc already exists"
                 )
             ss["arcs"][(frm, sink)] = new_meta
 
-    # 5. inlet_v が孤立していれば削除（Q2）
+    # 5. Delete inlet_v if it is now isolated (Q2)
     has_remaining = any(inlet_v in k for k in ss["arcs"])
     if not has_remaining:
         del ss["vertices"][inlet_v]
 
 
 def _resolve_reroute_sink(ss: dict[str, Any], reroute_to_opt: str | None) -> str:
-    """delete_unit の流入振替先を決定。reroute_to があればそれ、なければ role=residue を自動探索。"""
+    """Pick the reroute target for delete_unit inflows: reroute_to if given, else the first role=residue vertex."""
     if reroute_to_opt is not None:
         if reroute_to_opt not in ss["vertices"]:
             raise ApplyError(f"reroute_to={reroute_to_opt!r} not in vertices")
@@ -338,9 +349,10 @@ def op_add_arc(ss: dict[str, Any], op: dict[str, Any]) -> None:
     arc_type = op["type"]
     candidate = bool(op.get("candidate", False))
 
-    # unit フィールドは受け付けない：所有アーク（装置の内部構造）は add_unit /
-    # add_gated_unit だけが張る。誤タグの所有アークは validate の所有権検査でも
-    # 弾かれるが、入口で明示的に拒否した方が提案の修正が速い。
+    # A unit field is not accepted: owned arcs (a unit's internal structure) are created
+    # only by add_unit / add_gated_unit. A mistagged owned arc would also be caught by
+    # validate's ownership check, but rejecting it at the entry point makes fixing the
+    # proposal faster.
     if op.get("unit") is not None:
         raise ApplyError(
             f"add_arc must not carry a unit field (got unit={op['unit']!r}); "
@@ -363,11 +375,13 @@ def op_add_arc(ss: dict[str, Any], op: dict[str, Any]) -> None:
 
 
 def op_delete_arc(ss: dict[str, Any], op: dict[str, Any]) -> None:
-    """(from, to) のアークを1本削除する（op_add_arc の鏡像）。
+    """Delete the single arc (from, to) (the mirror image of op_add_arc).
 
-    ガードは meta の unit 有無だけ：ユニット所有アーク（膜の permeate/retentate,
-    COMP の内部アーク）は単体削除すると装置が壊れるので拒否し、delete_unit を使わせる。
-    削除で頂点が孤立・行き止まりになるケースは apply 後の validate（検査項目8）が弾く。
+    The only guard is whether meta carries a unit: unit-owned arcs (a membrane's
+    permeate/retentate, a COMP's inner arc) would break the unit if deleted on their
+    own, so they are rejected and delete_unit must be used instead.
+    Cases where the deletion isolates a vertex or creates a dead end are caught by
+    validate (check item 8) after the change is applied.
     """
     frm = op["from"]
     to = op["to"]
@@ -379,11 +393,13 @@ def op_delete_arc(ss: dict[str, Any], op: dict[str, Any]) -> None:
         raise ApplyError(
             f"arc {key} is owned by unit {owner!r}; use delete_unit instead"
         )
-    # ゾンビユニット化ガード：to がいずれかの unit の inlet で、削除するとその inlet への
-    # 給餌アークが SS 上から 1 本も無くなる場合は拒否する。給餌経路を失った unit は
-    # active_topology の pruning がどの q でも刈るため「絶対に建たないのに連続変数だけ
-    # GA 染色体に残り続ける」状態になり、validate（項目7/8 の対象外）でも検出できない。
-    # ユニットごと消したいなら delete_unit を使う（所有アーク拒否と同じ役割分担）。
+    # Zombie-unit guard: reject the deletion if `to` is some unit's inlet and removing
+    # this arc would leave no feed arc to that inlet anywhere in the SS. A unit that has
+    # lost its feed path is pruned by active_topology for every q, so it can never be
+    # built while its continuous variables linger in the GA chromosome — a state that
+    # validate (outside the scope of items 7/8) cannot detect either.
+    # To remove the unit itself, use delete_unit (the same division of roles as the
+    # owned-arc rejection).
     for uname, udef in ss["units"].items():
         if udef.get("inlet") != to:
             continue
@@ -432,26 +448,27 @@ OP_HANDLERS = {
 
 
 # =========================================================
-# 適用本体
+# Core application logic
 # =========================================================
 
 def apply_change(ss: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
-    """ss に change を適用して新しい SS を返す（in-place ではない）。
+    """Apply change to ss and return the new SS (not in-place).
 
-    history への append と iteration の +1 もここで行う。
-    validate は呼ばない（main / apply_from_files 側で行う）。
+    Appending to history and incrementing iteration also happen here.
+    validate is not called (main / apply_from_files do that).
     """
-    # スキーマガード（run24 iter_001 の実事故対策）: エージェントが "changes" 等の
-    # 誤ったトップレベルキーで書くと、旧実装は「0操作の空適用」を黙って成功させ、
-    # 気づかないまま同じ SS で次の反復（数時間）を走らせてしまう。operations が
-    # 無い・空・リストでない場合は明示的に失敗させる。
+    # Schema guard (against the real incident in run24 iter_001): if the agent writes a
+    # wrong top-level key such as "changes", the old implementation silently succeeded
+    # with an empty, zero-operation application, and the next iteration (hours long) then
+    # ran on the same SS unnoticed. Fail explicitly when operations is missing, empty,
+    # or not a list.
     ops = change.get("operations")
     if not isinstance(ops, list) or not ops:
         raise ApplyError(
-            "ss_change に operations（非空リスト）がありません。"
-            f"トップレベルキー: {sorted(change.keys())}。"
-            "正しいスキーマは {\"reason\": ..., \"operations\": [...]}"
-            "（ARCHITECTURE 6.2）"
+            "ss_change has no operations (a non-empty list). "
+            f"Top-level keys: {sorted(change.keys())}. "
+            "The correct schema is {\"reason\": ..., \"operations\": [...]}"
+            " (ARCHITECTURE 6.2)"
         )
 
     new_ss = copy.deepcopy(ss)
@@ -475,14 +492,15 @@ def apply_change(ss: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_from_files(base_dir: str, iter_num: int, force: bool = False) -> dict[str, Any]:
-    """ss_change.json を読んで ss_current.json を更新する（CLI 本体）。
+    """Read ss_change.json and update ss_current.json (the CLI core).
 
-    - 適用前に必ず ss_current.json を ss_before_change.json に退避（ARCH 7節）。
-    - 退避先が既に存在する場合は「適用済みの再実行」とみなして拒否する（force=True で
-      のみ上書き許可）。無条件上書きだとリトライ1回でロールバック起点（変更前 SS）が
-      適用後の状態に化けて永久に失われる。
-    - 適用 → topology.validate → save の順。validate 失敗時は例外で停止し
-      ss_current.json は更新されない（ARCH 6.2.1）。
+    - ss_current.json is always backed up to ss_before_change.json first (ARCH section 7).
+    - If the backup already exists, this is treated as a re-run of an already-applied
+      change and rejected (only force=True permits overwriting). Unconditional
+      overwriting would let a single retry turn the rollback origin (the pre-change SS)
+      into the post-change state, losing it forever.
+    - Order: apply -> topology.validate -> save. If validate fails it raises and
+      ss_current.json is left unchanged (ARCH 6.2.1).
     """
     iter_dir = os.path.join(base_dir, f"iterations/iter_{iter_num:03d}")
     change_file = os.path.join(iter_dir, "ss_change.json")
@@ -517,7 +535,7 @@ def apply_from_files(base_dir: str, iter_num: int, force: bool = False) -> dict[
 # =========================================================
 
 def get_latest_iter_num(base_dir: str) -> int | None:
-    """iterations/ 配下で ss_change.json が存在する最大の iter 番号を返す。"""
+    """Return the highest iter number under iterations/ that has an ss_change.json."""
     iter_base = os.path.join(base_dir, "iterations")
     if not os.path.exists(iter_base):
         return None
@@ -536,10 +554,11 @@ def get_latest_iter_num(base_dir: str) -> int | None:
 
 
 def _load_membrane_model() -> dict[str, Any] | None:
-    """case.yaml の membrane_model を表示用に読む（無ければ None・失敗しても落とさない）。
+    """Read membrane_model from case.yaml for display (None if absent; never raises).
 
-    apply_ss はロジック上 case に依存しないが、サマリの連続変数の本数・名前を
-    GA/BO（membrane_model 込みで導出）と一致させるためだけに参照する。
+    apply_ss does not depend on the case logically; this is referenced only so that the
+    number and names of the continuous variables in the summary match those of GA/BO
+    (which derive them including membrane_model).
     """
     case_path = os.path.normpath(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "case.yaml")
@@ -566,9 +585,10 @@ def print_ss_summary(ss: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    # Windows の既定コンソールは cp932 で、ss_change の reason に含まれる非 cp932 文字
-    # （矢印・記号等）を print すると UnicodeEncodeError で落ちる。自律ループは reason を
-    # 任意の Unicode で生成するため、標準ストリームを UTF-8 に固定して堅牢化する。
+    # The default Windows console is cp932, so printing non-cp932 characters (arrows,
+    # symbols, etc.) contained in an ss_change reason raises UnicodeEncodeError. The
+    # autonomous loop generates reasons in arbitrary Unicode, so pin the standard
+    # streams to UTF-8 for robustness.
     for _stream in (sys.stdout, sys.stderr):
         try:
             _stream.reconfigure(encoding="utf-8")
@@ -600,7 +620,7 @@ def main() -> None:
         change_preview = json.load(f)
 
     print("=" * 60)
-    print(f"Applying SS change: iter {iter_num} → {iter_num + 1}")
+    print(f"Applying SS change: iter {iter_num} -> {iter_num + 1}")
     print(f"Reason: {change_preview.get('reason', '(not stated)')}")
     print("=" * 60)
 

@@ -1,21 +1,29 @@
-"""比較対象（12.6 一括最適化）専用の one-hot GA。
+"""One-hot GA dedicated to the baseline (12.6 single-shot optimization).
 
-Lee (2018) Fig.2 型の超構造では「各膜出口の行き先はちょうど1つ」（one-hot）が
-構造制約になる。既存 ga.py のビット表現（バイナリ独立フリップ）だと、ランダムな
-遺伝子が one-hot になる確率は 3段版で 1/4096 しかなく、集団のほぼ全員が建設不能
-＝ペナルティ一色で進化の手がかりを失う（藁人形比較になる）。Lee 自身の GA も
-排他性を前提に組まれているため、本モジュールは**出口1つにつき遺伝子1個
-（値＝行き先の選択）**のカテゴリカル表現を使い、常に有効な構造だけを探索する。
+In a Lee (2018) Fig.2-style superstructure, "exactly one destination per membrane
+outlet" (one-hot) is a structural constraint. With the bit representation of the
+existing ga.py (independent binary flips), the probability that a random genome is
+one-hot is only 1/4096 in the 3-stage case, so almost the entire population is
+unbuildable: everything is penalized and evolution loses any gradient to follow
+(making it a straw-man comparison). Lee's own GA is likewise built around this
+exclusivity, so this module uses a categorical representation with **one gene per
+outlet (its value = the chosen destination)** and therefore searches only over
+structures that are always valid.
 
-既存 SST コードは一切変更しない：
-- 評価境界（Evaluator）・トポロジー・コスト式・fitness 定義は src/ から import して共有
-- 交叉/変異/選択の確率・分布・エリート保存は ga.py の定数を忠実にミラー
-  （交叉 p=0.7・一様/blend、変異 p=0.3・遺伝子毎 p=0.5、トーナメント3、エリート1）
-- 戻り値は run_ga と同一の (best, gen_log, n_evals)。best はバイナリ+連続の
-  フル染色体（run_iteration.run_one_iteration がそのまま解釈できる形）
+The existing SST code is left completely untouched:
+- The evaluation boundary (Evaluator), the topology, the cost model and the fitness
+  definition are imported from src/ and thus shared
+- The probabilities, distributions and elitism of crossover/mutation/selection
+  faithfully mirror the constants of ga.py
+  (crossover p=0.7 uniform/blend, mutation p=0.3 with p=0.5 per gene, tournament
+  size 3, 1 elite)
+- The return value is the same (best, gen_log, n_evals) as run_ga. best is the full
+  binary+continuous chromosome (in the form run_iteration.run_one_iteration reads
+  directly)
 
-run_ga と同一シグネチャなので、ランナーが run_iteration.run_ga をこの関数に
-差し替えるだけで既存の駆動・結果保存・signals がすべて流用できる。
+Since the signature is identical to run_ga, the runner only has to swap
+run_iteration.run_ga for this function and the existing driving, result saving and
+signals all carry over.
 """
 
 from __future__ import annotations
@@ -39,7 +47,7 @@ from evaluator import (  # noqa: E402
     cost_per_tco2,
     membrane_areas_from_x,
 )
-from ga import _fitness  # noqa: E402  （fitness 定義を共有＝比較の同一性を保証）
+from ga import _fitness  # noqa: E402  (share the fitness definition = guarantee an identical comparison)
 from topology import (  # noqa: E402
     active_topology,
     binary_variables,
@@ -50,10 +58,11 @@ from topology import (  # noqa: E402
 
 
 def onehot_groups(ss: dict[str, Any]) -> list[list[int]]:
-    """候補アークを「同一出口（アークの src 頂点）」でグループ化して返す。
+    """Group the candidate arcs by "same outlet" (the src vertex of the arc).
 
-    各グループが one-hot 制約の単位（ちょうど1本 ON）。返り値は
-    binary_variables(ss) のインデックスのリストのリスト（出現順・決定論的）。
+    Each group is one unit of the one-hot constraint (exactly one arc ON). The
+    return value is a list of lists of indices into binary_variables(ss) (in order
+    of appearance, deterministic).
     """
     bin_vars = binary_variables(ss)
     by_src: dict[str, list[int]] = {}
@@ -63,7 +72,7 @@ def onehot_groups(ss: dict[str, Any]) -> list[list[int]]:
 
 
 def genes_to_bits(genes: list[int], groups: list[list[int]], n_binary: int) -> list[float]:
-    """構造遺伝子（グループ毎の選択番号）→ バイナリ 0/1 ベクトル。"""
+    """Structural genes (the choice index per group) -> a binary 0/1 vector."""
     bits = [0.0] * n_binary
     for g, choice in zip(groups, genes):
         bits[g[int(choice)]] = 1.0
@@ -76,11 +85,11 @@ def run_ga_onehot(
     evaluator: Evaluator,
     seed: int = 1,
 ) -> tuple[Any, list[dict], int]:
-    """one-hot 構造遺伝子の Mixed GA（run_ga と同一シグネチャ・同一戻り値形式）。
+    """Mixed GA over one-hot structural genes (same signature and return format as run_ga).
 
-    染色体（内部表現）: [dest_1..dest_G | x_1..x_n]
-        dest_g ∈ {0..len(group_g)-1}（出口 g の行き先の選択）
-    戻り値の best は run_ga 互換の [q_1..q_m | x_1..x_n]（0/1 ＋連続）。
+    Chromosome (internal representation): [dest_1..dest_G | x_1..x_n]
+        dest_g in {0..len(group_g)-1} (the destination chosen for outlet g)
+    The returned best is run_ga compatible: [q_1..q_m | x_1..x_n] (0/1 plus continuous).
     """
     bin_vars  = binary_variables(ss)
     cont_vars = continuous_variables(ss, case.get("membrane_model"))
@@ -94,7 +103,7 @@ def run_ga_onehot(
     n_gen    = int(ga_cfg["n_gen"])
     targets  = case["optimization_targets"]
 
-    # ---- 目的の切替（ga.py と同一）----
+    # ---- Objective switch (identical to ga.py) ----
     cost_mode = str(targets.get("objective", "")).strip() == "minimize_cost"
     if cost_mode:
         econ = {**ECONOMICS_DEFAULTS, **(case.get("economics") or {})}
@@ -109,11 +118,11 @@ def run_ga_onehot(
         return cost_per_tco2(m, areas, case)
 
     cont_bounds = [cv["bounds"] for cv in cont_vars]
-    sigma_cont  = [(hi - lo) * 0.15 for lo, hi in cont_bounds]  # ga.py と同一
+    sigma_cont  = [(hi - lo) * 0.15 for lo, hi in cont_bounds]  # identical to ga.py
 
     rng = random.Random(seed)
 
-    # ---- 個体 = {"genes": [int]*G, "x": [float]*n, "fit": float | None} ----
+    # ---- individual = {"genes": [int]*G, "x": [float]*n, "fit": float | None} ----
     def new_individual() -> dict:
         return {
             "genes": [rng.randrange(len(g)) for g in groups],
@@ -129,11 +138,12 @@ def run_ga_onehot(
             ind["x"][k] = max(lo, min(hi, ind["x"][k]))
 
     def crossover(c1: dict, c2: dict) -> None:
-        # 構造: 一様交叉（遺伝子毎 p=0.5。ga.py のバイナリ一様交叉に対応）
+        # Structure: uniform crossover (p=0.5 per gene; matches the binary uniform
+        # crossover of ga.py)
         for g in range(n_groups):
             if rng.random() < 0.5:
                 c1["genes"][g], c2["genes"][g] = c2["genes"][g], c1["genes"][g]
-        # 連続: blend（ga.py と同一の gamma 式）
+        # Continuous: blend (the same gamma formula as ga.py)
         for k in range(n_cont):
             gamma = (1.0 + 2.0 * 0.5) * rng.random() - 0.5
             v1, v2 = c1["x"][k], c2["x"][k]
@@ -141,20 +151,21 @@ def run_ga_onehot(
             c2["x"][k] = gamma * v1 + (1.0 - gamma) * v2
 
     def mutate(ind: dict) -> None:
-        # 構造: 遺伝子毎 p=0.5 で「別の行き先」に付け替え
-        # （ga.py のビット反転＝必ず値が変わる、に対応するカテゴリカル版）
+        # Structure: with p=0.5 per gene, switch to a different destination
+        # (the categorical counterpart of ga.py's bit flip, which always changes
+        # the value)
         for g in range(n_groups):
             if rng.random() < 0.5 and len(groups[g]) > 1:
                 cur = ind["genes"][g]
                 alts = [c for c in range(len(groups[g])) if c != cur]
                 ind["genes"][g] = rng.choice(alts)
-        # 連続: ガウス変異（遺伝子毎 p=0.5・sigma は ga.py と同一）
+        # Continuous: Gaussian mutation (p=0.5 per gene; sigma identical to ga.py)
         for k in range(n_cont):
             if rng.random() < 0.5:
                 ind["x"][k] += rng.gauss(0, sigma_cont[k])
 
     def tournament(pop: list[dict], k: int) -> list[dict]:
-        # tools.selTournament(tournsize=3) 相当（無効 fitness は inf 扱い）
+        # Equivalent to tools.selTournament(tournsize=3) (an invalid fitness counts as inf)
         out = []
         for _ in range(k):
             cands = [pop[rng.randrange(len(pop))] for _ in range(3)]
@@ -162,7 +173,7 @@ def run_ga_onehot(
         return out
 
     def evaluate(individuals: list[dict]) -> int:
-        """構造キーでグループ化 → 1トポロジー1ビルドで一括評価（ga.py と同じ畳み込み）。"""
+        """Group by structural key -> one build per topology, evaluated in a batch (the same folding as ga.py)."""
         by_struct: dict[tuple, list[dict]] = defaultdict(list)
         for ind in individuals:
             by_struct[tuple(ind["genes"])].append(ind)
@@ -172,7 +183,7 @@ def run_ga_onehot(
             q_active = {bv["name"]: int(b) for bv, b in zip(bin_vars, bits)}
             topology = active_topology(ss, q_active)
             reason = is_buildable(topology)
-            if reason is not None:  # one-hot なら来ないはずの防御
+            if reason is not None:  # defensive: unreachable if the genome is one-hot
                 metrics_list = [Metrics.bad() for _ in inds]
             else:
                 x_list = [x_for_topology(ind["x"], cont_vars, topology) for ind in inds]
@@ -183,8 +194,8 @@ def run_ga_onehot(
             total += len(inds)
         return total
 
-    # ---- メインループ（ga.py の構成を忠実にミラー）----
-    t0 = time.monotonic()   # gen_log の "t"＝最適化開始からの経過秒
+    # ---- Main loop (faithfully mirrors the structure of ga.py) ----
+    t0 = time.monotonic()   # "t" in gen_log = seconds elapsed since the start of the optimization
     pop = [new_individual() for _ in range(pop_size)]
     n_evals = evaluate(pop)
 
@@ -212,13 +223,13 @@ def run_ga_onehot(
         invalid = [ind for ind in offspring if ind["fit"] is None]
         _t_eval0 = time.monotonic()
         n_evals += evaluate(invalid)
-        t_eval_sec = round(time.monotonic() - _t_eval0, 2)   # この世代の評価実時間
+        t_eval_sec = round(time.monotonic() - _t_eval0, 2)   # wall-clock evaluation time of this generation
 
         pop = offspring
         gen_best = min(pop, key=lambda i: i["fit"])
         if gen_best["fit"] < best["fit"]:
             best = clone(gen_best)
-        # エリート保存: worst を best のクローンで置換（ga.py と同一）
+        # Elitism: replace the worst with a clone of the best (identical to ga.py)
         worst_idx = max(range(len(pop)),
                         key=lambda i: pop[i]["fit"] if pop[i]["fit"] is not None else float("inf"))
         pop[worst_idx] = clone(best)
@@ -228,6 +239,6 @@ def run_ga_onehot(
                         "t_eval": t_eval_sec})
         print(f"  Gen {gen+1:2d}: best={best_fit:.1f}")
 
-    # run_ga 互換のフル染色体（0/1 バイナリ + 連続）で返す
+    # Return a run_ga compatible full chromosome (0/1 binaries + continuous)
     best_chromosome = genes_to_bits(best["genes"], groups, n_binary) + list(best["x"])
     return best_chromosome, gen_log, n_evals

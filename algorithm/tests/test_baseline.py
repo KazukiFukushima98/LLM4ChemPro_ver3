@@ -1,12 +1,13 @@
-"""比較対象（12.6 一括最適化・baseline/）の単体テスト（Aspen 不要）。
+"""Unit tests for the comparison target (12.6 monolithic optimization, baseline/) (no Aspen required).
 
-対象:
-- ss_lee2.json / ss_lee3.json（Lee Fig.2 型 SS・各段に固定 COMP 入り）の構造整合
-- one-hot 有効組合せの解析的生成（81 / 4096）と全数ビルド可能性（設計不変条件）
-- ga_onehot（カテゴリカル構造遺伝子の GA）の完走・one-hot 保証・決定論
-- BO への実行時注入（patch_bo_for_onehot）での完走と one-hot 保証
+Scope:
+- structural consistency of ss_lee2.json / ss_lee3.json (Lee Fig.2-style SS, with a fixed COMP per stage)
+- analytic enumeration of the valid one-hot combinations (81 / 4096) and exhaustive buildability
+  (a design invariant)
+- ga_onehot (GA over categorical structure genes): completion, one-hot guarantee, determinism
+- completion and one-hot guarantee under runtime injection into BO (patch_bo_for_onehot)
 
-実行:
+Run:
     uv run python -m unittest tests.test_baseline
 """
 
@@ -33,11 +34,11 @@ from run_baseline import assert_all_buildable, build_onehot_fixed_features, patc
 LEE2 = os.path.join(BASE, "ss_lee2.json")
 LEE3 = os.path.join(BASE, "ss_lee3.json")
 
-_MM = {"tie": False}  # run24 と同じ段別独立膜
+_MM = {"tie": False}  # per-stage independent membranes, as in run24
 
 
 class _SmoothMock:
-    """決定論的な有限 Metrics を返すモック（test_bo と同型）。"""
+    """Mock returning deterministic, finite Metrics (same shape as in test_bo)."""
 
     def evaluate_topology(self, topology, x_list):
         out = []
@@ -56,32 +57,32 @@ class TestLeeSeeds(unittest.TestCase):
         ss = T.load_ss(LEE2)
         self.assertEqual(len(T.binary_variables(ss)), 12)
         self.assertEqual([len(g) for g in onehot_groups(ss)], [3, 3, 3, 3])
-        # 段別独立膜: 2膜 × (area, p_perm, perm) = 6 ＋ 各段 COMP の pout ×2 = 8
+        # per-stage independent membranes: 2 membranes x (area, p_perm, perm) = 6, plus the pout of each stage's COMP x2 = 8
         self.assertEqual(len(T.continuous_variables(ss, _MM)), 8)
 
     def test_lee3_shape(self):
         ss = T.load_ss(LEE3)
         self.assertEqual(len(T.binary_variables(ss)), 24)
         self.assertEqual([len(g) for g in onehot_groups(ss)], [4] * 6)
-        # 3膜 × 3 ＋ 各段 COMP の pout ×3 = 12
+        # 3 membranes x 3, plus the pout of each stage's COMP x3 = 12
         self.assertEqual(len(T.continuous_variables(ss, _MM)), 12)
 
     def test_lee2_series_no_recycle_topology(self):
-        """直列（M1→M2→P、残渣→R）の one-hot 割当が正しい2段構造になる。"""
+        """The one-hot assignment for the series case (M1->M2->P, retentate->R) gives the correct 2-stage structure."""
         ss = T.load_ss(LEE2)
         q = {f"q_{k}": 0 for k in range(1, 13)}
-        q.update({"q_2": 1, "q_6": 1, "q_9": 1, "q_12": 1})  # V2→F2, V3→R, V5→P, V6→R
+        q.update({"q_2": 1, "q_6": 1, "q_9": 1, "q_12": 1})  # V2->F2, V3->R, V5->P, V6->R
         topo = T.active_topology(ss, q)
         self.assertIsNone(T.is_buildable(topo))
         self.assertEqual(set(topo["units"]), {"COMP1", "COMP2", "MEMB1", "MEMB2"})
-        self.assertIn(("V2", "V11"), topo["arcs"])  # M1透過 → F2 pre-mixer（COMP2 前）
+        self.assertIn(("V2", "V11"), topo["arcs"])  # M1 permeate -> F2 pre-mixer (upstream of COMP2)
         self.assertIn(("V5", "V7"), topo["arcs"])
 
     def test_lee2_unfed_m2_prunes_to_single_stage(self):
-        """M2 に誰も給餌しない割当では COMP2+M2 が連鎖して刈られ、1段構成として成立する。"""
+        """In an assignment where nothing feeds M2, COMP2+M2 are pruned as a chain and a valid single-stage configuration remains."""
         ss = T.load_ss(LEE2)
         q = {f"q_{k}": 0 for k in range(1, 13)}
-        q.update({"q_3": 1, "q_6": 1})  # V2→P, V3→R（M2 系は給餌なし）
+        q.update({"q_3": 1, "q_6": 1})  # V2->P, V3->R (nothing feeds the M2 branch)
         topo = T.active_topology(ss, q)
         self.assertIsNone(T.is_buildable(topo))
         self.assertEqual(set(topo["units"]), {"COMP1", "MEMB1"})
@@ -104,26 +105,27 @@ class TestOnehotEnumeration(unittest.TestCase):
         self.assertEqual(len(combos), 4 ** 6)  # 4096
 
     def test_lee2_all_combos_buildable(self):
-        """設計不変条件: one-hot なら全組合せがビルド可能（81 個の全数検証）。"""
+        """Design invariant: with one-hot, every combination is buildable (all 81 verified)."""
         ss = T.load_ss(LEE2)
         assert_all_buildable(ss, build_onehot_fixed_features(ss))
 
     @unittest.skipUnless(os.environ.get("BASELINE_FULL") == "1",
-                         "重い全数検証（~10分）。BASELINE_FULL=1 で実行。"
-                         "本番ランナーは起動時に毎回同じ検査を行うため安全性は保たれる")
+                         "Heavy exhaustive verification (~10 min). Run it with BASELINE_FULL=1. "
+                         "Safety is preserved regardless, because the production runner performs "
+                         "the same check on every start-up")
     def test_lee3_all_combos_buildable(self):
-        """同・3段版（4096 個の全数検証。ランナー実行時と同じ検査）。
+        """The same for the 3-stage version (all 4096 verified; the same check the runner performs).
 
-        2026-07-12 に BASELINE_FULL=1 で全数 PASS 済み。日常スイートでは skip。
+        Verified PASS over the full set with BASELINE_FULL=1 on 2026-07-12. Skipped in the everyday suite.
         """
         ss = T.load_ss(LEE3)
         assert_all_buildable(ss, build_onehot_fixed_features(ss))
 
     def test_lee3_sampled_combos_buildable(self):
-        """3段版の抜き取り検証（全 4096 から決定論的に 128 個）。日常スイート用。"""
+        """Spot check of the 3-stage version (128 combinations drawn deterministically from all 4096). For the everyday suite."""
         ss = T.load_ss(LEE3)
         combos = build_onehot_fixed_features(ss)
-        assert_all_buildable(ss, combos[::32])  # 128 個
+        assert_all_buildable(ss, combos[::32])  # 128 combinations
 
 
 class TestGAOnehot(unittest.TestCase):
@@ -152,15 +154,15 @@ class TestGAOnehot(unittest.TestCase):
         n_cont = len(T.continuous_variables(ss, _MM))
         self.assertEqual(len(best), n_bin + n_cont)
         for g in onehot_groups(ss):
-            self.assertEqual(sum(best[i] for i in g), 1.0, "best が one-hot でない")
+            self.assertEqual(sum(best[i] for i in g), 1.0, "best is not one-hot")
         self.assertEqual(len(gen_log), 3)
         self.assertGreaterEqual(n_evals, 8)
         ts = [g["t"] for g in gen_log]
         self.assertTrue(all(b >= a for a, b in zip(ts, ts[1:])), ts)
-        # 各世代の評価実時間 t_eval（非負）
+        # wall-clock evaluation time t_eval per generation (non-negative)
         for g in gen_log:
             self.assertGreaterEqual(g["t_eval"], 0.0)
-        # 連続部が bounds 内
+        # the continuous part lies within bounds
         for v, cv in zip(best[n_bin:], T.continuous_variables(ss, _MM)):
             lo, hi = cv["bounds"]
             self.assertGreaterEqual(v, lo - 1e-9)
@@ -176,7 +178,7 @@ class TestGAOnehot(unittest.TestCase):
                          [g["best_fitness"] for g in b[1]])
 
     def test_x_dims_match_pruned_topology(self):
-        """evaluator に渡る x が具体トポロジー（pruning 後）の変数次元と一致する。"""
+        """The x reaching the evaluator matches the variable dimension of the concrete topology (after pruning)."""
         ss = T.load_ss(LEE2)
         mismatches = []
 
@@ -194,7 +196,7 @@ class TestGAOnehot(unittest.TestCase):
 
 
 class TestBOOnehotInjection(unittest.TestCase):
-    """patch_bo_for_onehot（ランナーと同一コード）で run_bo が完走し one-hot を保つ。"""
+    """With patch_bo_for_onehot (the same code as the runner), run_bo completes and preserves one-hot."""
 
     def test_bo_with_injected_onehot_completes(self):
         import bo as bo_mod
@@ -212,12 +214,12 @@ class TestBOOnehotInjection(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 best, gen_log, n_evals = run_bo(ss, case, _SmoothMock(), seed=9)
         finally:
-            bo_mod._build_fixed_features = orig_ff   # 他テストへの影響を残さない
+            bo_mod._build_fixed_features = orig_ff   # leave no effect on other tests
             bo_mod._sobol_initial = orig_sobol
         n_bin = len(T.binary_variables(ss))
         self.assertEqual(len(best), n_bin + len(T.continuous_variables(ss, _MM)))
         for g in onehot_groups(ss):
-            self.assertEqual(sum(round(best[i]) for i in g), 1, "best が one-hot でない")
+            self.assertEqual(sum(round(best[i]) for i in g), 1, "best is not one-hot")
         self.assertEqual(len(gen_log), 2)
 
 
