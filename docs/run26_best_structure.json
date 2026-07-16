@@ -2,7 +2,7 @@
   "_provenance": {
     "run": "run26",
     "best_iteration": "iter_006",
-    "date": "2026-07-15",
+    "date": "2026-07-16",
     "note": "ブロワーシナリオ（全膜入口 1.1 bar 固定・COMP は GA 変数外）での SST。構造・数値は iterations の results.json / ss_snapshot.json より。permeance 1 GPU = 2.70677e-3 m3(STP)/(m2 h bar)、α は Robeson 2008 上界導出。"
   },
   "performance": {
