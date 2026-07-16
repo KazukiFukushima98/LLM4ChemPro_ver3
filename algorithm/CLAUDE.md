@@ -147,3 +147,8 @@ Once stopped, record the handoff in **`runs/runN/HANDOFF.md`** (final performanc
 - Direct the inflows of a `delete_unit` to the residue sink (`ARCHITECTURE.md` 6.3). The product sink is fixed and does not break.
 - Do not modify `ss_seed.json` / `case.yaml`. Changes to the SS always go through `ss_change.json`.
 - Ask yourself once whether the proposal is physically sound (does the mass balance hold, are you creating an isolated flow). The `validate` of `apply_ss.py` also rejects such cases, but do not make obviously meaningless proposals.
+- **Do not run multi-line `python -c "..."` one-liners; write them to `scratch/*.py` and run the file instead**
+  (`uv run python scratch/check.py`). A quoted `-c` argument containing newlines and `#` comments trips the
+  harness's command-injection heuristic, which overrides the allowlist and blocks the loop on a permission
+  prompt until a human answers — during a timed run this silently invalidates the wall-clock measurement
+  (this actually happened in run28, 2026-07-16). Running a `scratch/` file never triggers the prompt.

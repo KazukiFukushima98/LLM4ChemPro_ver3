@@ -223,7 +223,7 @@ class AspenEvaluator:
         aspen.Tree.FindNode(r"\Data\Streams\V0\Input\FLOW\MIXED\NITRO-01").value = 1.0 - feed["co2_frac"]
 
     def _build(self, topology: dict) -> tuple:
-        """Build Aspen and return (aspen, energy_blocks). Returns (None, None) on failure.
+        """Build Aspen and return (aspen, energy_blocks, coolers). Returns (None, None, None) on failure.
 
         Corresponds to the old _build_aspen function (run_iteration.py:155-173).
         build_aspen_from_epnt already does a taskkill internally (aspen_builder.py:68), so
@@ -236,12 +236,12 @@ class AspenEvaluator:
             if new_dmps:
                 print("    Aspen crash during build (.dmp detected)")
                 kill_aspen_image()
-                return None, None
+                return None, None, None
             self._apply_feed(aspen)   # <- inside the try (also catches a COM write hang)
         except Exception as e:
             print(f"    Aspen build failed: {e}")
             kill_aspen_image()
-            return None, None
+            return None, None, None
 
         # energy_blocks = auto-VP names + explicit COMP/EXP unit names
         # (an EXP = expander has negative WNET, i.e. it counts as recovered power in the
