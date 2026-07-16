@@ -3,7 +3,8 @@
 作成 2026-07-16 / ブランチ `i18n/english-algorithm` / コミット `30319cc`
 
 このセッションで `algorithm/` を英語化した。**コードは1行も変更していない**（＝挙動不変）。
-本ドキュメントは次セッションへの引き継ぎであり、**未了の検証が2件ある**。
+本ドキュメントは次セッションへの引き継ぎであり、~~**未了の検証が2件ある**~~
+→ **2026-07-16 追記: 残課題2件（実機 smoke・SST 挙動確認 run）は完了した（§2 参照）。英訳の検証はすべて閉じた。**
 
 ---
 
@@ -47,20 +48,14 @@
 3. **Aspen 非依存テスト** — **267 件パス（OK, skipped=1）**、実 exit code 0 で確認。
    （`| tail` を挟むと exit code が tail のものになり常に 0 になる。判定に使わないこと。）
 
-### 担保できていないこと ＝ 次セッションの残課題
+### 担保できていないこと ＝ 次セッションの残課題 → **両方完了（2026-07-16 検証済み）**
 
-| # | 課題 | なぜ必要か |
+| # | 課題 | 結果 |
 |---|---|---|
-| A | **Aspen 実機 smoke** | `src/aspen_watchdog.py` に触った（コメント追加のみだが、実機でしか確認できない）。`uv run python scratch/smoke_ver3.py` 相当を1回。 |
-| B | **SST エージェントの挙動確認 run** | `algorithm/CLAUDE.md` と `.claude/commands/sst-loop.md` は**LLM へのプロンプト**。英訳で提案の傾向が変わっていないかはテストで守れない。短い `--dry` run を回して確認するしかない。 |
+| A | **Aspen 実機 smoke** | **完了・全項目 PASS**。`uv run python scratch/smoke_ver3.py` を実機で1回実行（exit 0）。[1] Lee スケール feed 収束 / [2] permeance 書き込み反映 / [3] VP1・VP2 両方の WNET>0 / [5] 再現性（E 差 <1%）すべて PASS。[4] Mixer PRES は全 MIXV で 0.0（最小圧追従）を確認。 |
+| B | **SST エージェントの挙動確認 run** | **完了・挙動正常**。`runs/run27` を新規作成し、dry 設定（`--bo-n-init 4 --bo-n-iter 3 --bo-q-batch 2 --no-commit`）で iter_001（ベースライン）→ SST 提案 → apply_ss → iter_002 の1サイクルを実施。英語プロンプト（英訳後 `CLAUDE.md` / `sst-loop.md`）下で、シグナル抽出（bounds 張り付き・residue CO2 損失 35.3%）→ 定量根拠つき `ss_change.json`（gated COMP3+MEMB3 の第3段追加、V6 の residue⇄recycle トグルペア、binary 4 ≤ 8）→ apply_ss 一発通過（validate OK、頂点採番 V13–V16 予測どおり）→ iter_002 で BO が候補を実際にトグル（q_1=1/q_2=0 で第3段 ON、相互排他も正常）まで従来同様に動作した。iter_002: purity 66.0→87.1%（第3段が機能）。recovery 20.2% は縮小バジェット（12評価）のノイズ域であり、検証目的（提案挙動の確認）には影響しない。 |
 
-**B の手順（合意済みの方針2）**:
-`case.yaml` の `optimizer` は現在 `bo` なので、
-`uv run python -u src/run_iteration.py --base-dir runs/runXX --bo-n-init 4 --bo-n-iter 3 --bo-q-batch 2 --no-commit`
-を新規 run で回し、SST エージェントが英語プロンプトで従来同様の構造提案を出すかを見る。
-run 間ブラインドの原則があるので、**新しい run 番号**で行うこと。
-
-どちらも Aspen を占有するため、ユーザに実行可否を確認してから着手する。
+（run27 は検証専用の dry run。`--no-commit` のため git 履歴には残らない。）
 
 ---
 
