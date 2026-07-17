@@ -26,9 +26,27 @@ infeasible）、Deb 規則版（`33e24c1`）は 5.1h で feasible 到達も **73
 コストを磨けず打ち切り。SST run30（67.15 $/t・6.1h）の優位が 1 seed 時点で明確。
 詳細は experiment_log.md の baseline 比較・第1弾節。
 
+**比較実験 matrix（ユーザとの設計議論 2026-07-17、細部は（仮））**：
+打ち切りは全て wall-clock 6.5h（GA=世代境界、BO=バッチ境界＋獲得関数前チェック＋ハードタイムアウト）。
+
+| 枠 | 構成 | 本数 | 位置づけ |
+|---|---|---|---|
+| SST | 現行構成 独立 run ×5（run30 が1本目） | 5 | 主結果＋構造再現性 |
+| GA-Deb | lee3_blower ×5・lee4_blower ×5 | 10 | 一括 GA 本命 |
+| GA-penalty | lee4_blower ×3 | 3 | constraint handling ablation |
+| BO 一括（2相 CBO） | lee3_blower ×5 | 5 | 最重要 ablation（SST の遷移抜き） |
+| BO 一括（ペナルティ1本GP） | lee3_blower ×3 | 3 | 任意 |
+| **BO 一括 × lee4（仮）** | 獲得関数の組合せを毎バッチ 4,096 抽選（=lee3 と同じ獲得計算量） ×3 | 3 | 破綻前提で挙動を記録。全列挙は ~30h/バッチで不可能な旨は本文に記載。抽選 K・実施可否は（仮） |
+| **LLM 直接解（仮）** | エージェントが構造＋連続値の完全解を毎回提案→1評価→再提案、6.5h ×3 | 3 | 「直接設計させれば十分では」への実証。勝った場合の解釈も事前に規定（登録研究的記述） |
+
+補足：SST 内側 BO は binary ≤4（組合せ ≤16）なので厳密列挙のままで正しい —
+「外側が空間を畳むから内側にサンプリング妥協が不要」という対比自体が手法の利点（変数空間遷移図で主張）。
+SST の内側を替える ablation（内側 GA ×3）は任意・低優先。
+lee4 run の前に**評価ごとの構造＋purity/recovery ログ追加**（構造空間の地図・制約平面図の実データ化に必須）。
+
 **次の作業**：
-1. baseline 続き：pop 100 × lee3（Deb）、**4段全結合 seed（ss_lee4.json）作成**→ lee4 × pop 40/100、
-   BO baseline の wall-clock 対応、seed 追加（統計、各設定 3+）
+1. baseline 続き：pop 100 × lee3_blower（Deb）、評価ログ改修 → lee4_blower × pop 40/100、
+   BO baseline の wall-clock 対応（バッチ境界＋ハードタイムアウト）、seed 追加（上記 matrix）
 2. 論文図版：run30 best 構造の P&ID 図（scratch/make_run26_best_figure.py を流用）、
    時間内訳図に GA バーを追加（docs/run30_time_breakdown.json の bars に追記）
 3. HANDOFF 提言の検討：① BO 予算増強/獲得関数改良（CEI を最安点に安定させる）、
