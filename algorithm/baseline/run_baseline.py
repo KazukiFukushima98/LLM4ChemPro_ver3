@@ -141,7 +141,9 @@ def patch_bo_for_onehot(ss: dict[str, Any], seed: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ss", choices=["lee2", "lee3"], required=True)
+    parser.add_argument("--ss", choices=["lee2", "lee3", "lee3_blower", "lee4_blower"], required=True,
+                        help="lee2/lee3 = Lee-consistent variable compression (1.0-4.0 bar); "
+                             "*_blower = blower campaign (COMP fixed at 1.1 bar, matches run27+)")
     parser.add_argument("--optimizer", choices=["bo", "ga"], required=True)
     parser.add_argument("--pilot", action="store_true", help="check the plumbing on a reduced budget")
     parser.add_argument("--seed", type=int, default=1)

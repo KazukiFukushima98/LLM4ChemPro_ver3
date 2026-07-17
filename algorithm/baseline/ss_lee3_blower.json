@@ -1,0 +1,390 @@
+{
+  "iteration": 0,
+  "vertices": {
+    "V0": {
+      "role": "feed",
+      "label": "Feed (CO2 13%, post-combustion)"
+    },
+    "V1": {
+      "role": "internal",
+      "label": "M1 inlet (after COMP1)"
+    },
+    "V2": {
+      "role": "internal",
+      "label": "M1 permeate (after VP1)"
+    },
+    "V3": {
+      "role": "internal",
+      "label": "M1 retentate"
+    },
+    "V4": {
+      "role": "internal",
+      "label": "M2 inlet (after COMP2)"
+    },
+    "V5": {
+      "role": "internal",
+      "label": "M2 permeate (after VP2)"
+    },
+    "V6": {
+      "role": "internal",
+      "label": "M2 retentate"
+    },
+    "V7": {
+      "role": "product",
+      "label": "Product collector (P)"
+    },
+    "V8": {
+      "role": "residue",
+      "label": "Residue collector (R)"
+    },
+    "V9": {
+      "role": "internal",
+      "label": "M3 inlet (after COMP3)"
+    },
+    "V10": {
+      "role": "internal",
+      "label": "M3 permeate (after VP3)"
+    },
+    "V11": {
+      "role": "internal",
+      "label": "M3 retentate"
+    },
+    "V12": {
+      "role": "internal",
+      "label": "F1 pre-mixer / COMP1 inlet (1 bar)"
+    },
+    "V13": {
+      "role": "internal",
+      "label": "COMP1 outlet"
+    },
+    "V14": {
+      "role": "internal",
+      "label": "F2 pre-mixer / COMP2 inlet (1 bar)"
+    },
+    "V15": {
+      "role": "internal",
+      "label": "COMP2 outlet"
+    },
+    "V16": {
+      "role": "internal",
+      "label": "F3 pre-mixer / COMP3 inlet (1 bar)"
+    },
+    "V17": {
+      "role": "internal",
+      "label": "COMP3 outlet"
+    }
+  },
+  "arcs": [
+    {
+      "from": "V0",
+      "to": "V12",
+      "type": "feed"
+    },
+    {
+      "from": "V12",
+      "to": "V13",
+      "type": "compressor",
+      "unit": "COMP1"
+    },
+    {
+      "from": "V13",
+      "to": "V1",
+      "type": "process"
+    },
+    {
+      "from": "V14",
+      "to": "V15",
+      "type": "compressor",
+      "unit": "COMP2"
+    },
+    {
+      "from": "V15",
+      "to": "V4",
+      "type": "process"
+    },
+    {
+      "from": "V16",
+      "to": "V17",
+      "type": "compressor",
+      "unit": "COMP3"
+    },
+    {
+      "from": "V17",
+      "to": "V9",
+      "type": "process"
+    },
+    {
+      "from": "V1",
+      "to": "V2",
+      "type": "membrane_permeate",
+      "unit": "MEMB1"
+    },
+    {
+      "from": "V1",
+      "to": "V3",
+      "type": "membrane_retentate",
+      "unit": "MEMB1"
+    },
+    {
+      "from": "V4",
+      "to": "V5",
+      "type": "membrane_permeate",
+      "unit": "MEMB2"
+    },
+    {
+      "from": "V4",
+      "to": "V6",
+      "type": "membrane_retentate",
+      "unit": "MEMB2"
+    },
+    {
+      "from": "V9",
+      "to": "V10",
+      "type": "membrane_permeate",
+      "unit": "MEMB3"
+    },
+    {
+      "from": "V9",
+      "to": "V11",
+      "type": "membrane_retentate",
+      "unit": "MEMB3"
+    },
+    {
+      "from": "V2",
+      "to": "V12",
+      "type": "recycle",
+      "candidate": "q_1"
+    },
+    {
+      "from": "V2",
+      "to": "V14",
+      "type": "recycle",
+      "candidate": "q_2"
+    },
+    {
+      "from": "V2",
+      "to": "V16",
+      "type": "recycle",
+      "candidate": "q_3"
+    },
+    {
+      "from": "V2",
+      "to": "V7",
+      "type": "product",
+      "candidate": "q_4"
+    },
+    {
+      "from": "V3",
+      "to": "V12",
+      "type": "recycle",
+      "candidate": "q_5"
+    },
+    {
+      "from": "V3",
+      "to": "V14",
+      "type": "recycle",
+      "candidate": "q_6"
+    },
+    {
+      "from": "V3",
+      "to": "V16",
+      "type": "recycle",
+      "candidate": "q_7"
+    },
+    {
+      "from": "V3",
+      "to": "V8",
+      "type": "residue",
+      "candidate": "q_8"
+    },
+    {
+      "from": "V5",
+      "to": "V12",
+      "type": "recycle",
+      "candidate": "q_9"
+    },
+    {
+      "from": "V5",
+      "to": "V14",
+      "type": "recycle",
+      "candidate": "q_10"
+    },
+    {
+      "from": "V5",
+      "to": "V16",
+      "type": "recycle",
+      "candidate": "q_11"
+    },
+    {
+      "from": "V5",
+      "to": "V7",
+      "type": "product",
+      "candidate": "q_12"
+    },
+    {
+      "from": "V6",
+      "to": "V12",
+      "type": "recycle",
+      "candidate": "q_13"
+    },
+    {
+      "from": "V6",
+      "to": "V14",
+      "type": "recycle",
+      "candidate": "q_14"
+    },
+    {
+      "from": "V6",
+      "to": "V16",
+      "type": "recycle",
+      "candidate": "q_15"
+    },
+    {
+      "from": "V6",
+      "to": "V8",
+      "type": "residue",
+      "candidate": "q_16"
+    },
+    {
+      "from": "V10",
+      "to": "V12",
+      "type": "recycle",
+      "candidate": "q_17"
+    },
+    {
+      "from": "V10",
+      "to": "V14",
+      "type": "recycle",
+      "candidate": "q_18"
+    },
+    {
+      "from": "V10",
+      "to": "V16",
+      "type": "recycle",
+      "candidate": "q_19"
+    },
+    {
+      "from": "V10",
+      "to": "V7",
+      "type": "product",
+      "candidate": "q_20"
+    },
+    {
+      "from": "V11",
+      "to": "V12",
+      "type": "recycle",
+      "candidate": "q_21"
+    },
+    {
+      "from": "V11",
+      "to": "V14",
+      "type": "recycle",
+      "candidate": "q_22"
+    },
+    {
+      "from": "V11",
+      "to": "V16",
+      "type": "recycle",
+      "candidate": "q_23"
+    },
+    {
+      "from": "V11",
+      "to": "V8",
+      "type": "residue",
+      "candidate": "q_24"
+    }
+  ],
+  "units": {
+    "COMP1": {
+      "type": "COMP",
+      "inlet": "V12",
+      "outlets": {
+        "outlet": "V13"
+      },
+      "params": {
+        "outlet_pressure": 1.1
+      },
+      "bounds_override": {
+        "outlet_pressure": [
+          1.1,
+          1.1
+        ]
+      }
+    },
+    "COMP2": {
+      "type": "COMP",
+      "inlet": "V14",
+      "outlets": {
+        "outlet": "V15"
+      },
+      "params": {
+        "outlet_pressure": 1.1
+      },
+      "bounds_override": {
+        "outlet_pressure": [
+          1.1,
+          1.1
+        ]
+      }
+    },
+    "COMP3": {
+      "type": "COMP",
+      "inlet": "V16",
+      "outlets": {
+        "outlet": "V17"
+      },
+      "params": {
+        "outlet_pressure": 1.1
+      },
+      "bounds_override": {
+        "outlet_pressure": [
+          1.1,
+          1.1
+        ]
+      }
+    },
+    "MEMB1": {
+      "type": "MEMB",
+      "inlet": "V1",
+      "outlets": {
+        "permeate": "V2",
+        "retentate": "V3"
+      },
+      "params": {
+        "permeance_CO2": 2.70677,
+        "permeance_N2": 0.0541354,
+        "area": 500000.0,
+        "p_permeate": 0.2
+      }
+    },
+    "MEMB2": {
+      "type": "MEMB",
+      "inlet": "V4",
+      "outlets": {
+        "permeate": "V5",
+        "retentate": "V6"
+      },
+      "params": {
+        "permeance_CO2": 2.70677,
+        "permeance_N2": 0.0541354,
+        "area": 500000.0,
+        "p_permeate": 0.2
+      }
+    },
+    "MEMB3": {
+      "type": "MEMB",
+      "inlet": "V9",
+      "outlets": {
+        "permeate": "V10",
+        "retentate": "V11"
+      },
+      "params": {
+        "permeance_CO2": 2.70677,
+        "permeance_N2": 0.0541354,
+        "area": 500000.0,
+        "p_permeate": 0.2
+      }
+    }
+  },
+  "history": []
+}
