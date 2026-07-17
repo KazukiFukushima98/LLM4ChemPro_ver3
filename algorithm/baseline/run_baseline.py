@@ -185,6 +185,8 @@ def main() -> None:
     else:
         case["ga"] = dict(PILOT_GA if args.pilot else FULL_GA)
         case["ga"]["selection"] = args.selection
+        # Per-evaluation JSONL log (structure-space map / constraint-plane figures)
+        case["eval_log_path"] = os.path.join(base_dir, "eval_log.jsonl")
         if args.pop is not None:
             case["ga"]["pop_size"] = args.pop
         if args.max_hours is not None:

@@ -28,6 +28,7 @@ signals all carry over.
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import sys
@@ -114,6 +115,10 @@ def run_ga_onehot(
     # penalty fitness (observed in baseline_lee3_ga_pop40, 2026-07-17).
     # "penalty" keeps the legacy penalized-fitness tournament.
     selection = str(ga_cfg.get("selection", "deb"))
+    # Per-evaluation log (2026-07-17, for the structure-space map / constraint-plane
+    # figures): if the runner injects case["eval_log_path"], every evaluation appends
+    # one JSONL record {genes, purity, recovery, obj, viol}. BAD values become null.
+    eval_log_path = case.get("eval_log_path")
     targets  = case["optimization_targets"]
     purity_min   = float(targets["purity_min"])
     recovery_min = float(targets["recovery_min"])
@@ -225,6 +230,7 @@ def run_ga_onehot(
             else:
                 x_list = [x_for_topology(ind["x"], cont_vars, topology) for ind in inds]
                 metrics_list = evaluator.evaluate_topology(topology, x_list)
+            log_rows = []
             for ind, m in zip(inds, metrics_list):
                 obj = _objective(m, ind["x"], topology)
                 ind["fit"] = _fitness(obj, m.purity, m.recovery, targets, penalty_w)
@@ -235,6 +241,18 @@ def run_ga_onehot(
                     # max(0, pi_min - pi) + max(0, rho_min - rho)
                     ind["viol"] = max(0.0, purity_min - m.purity) + max(0.0, recovery_min - m.recovery)
                     ind["obj"] = float(obj)
+                if eval_log_path:
+                    bad = m.specific_energy >= BAD_VALUE
+                    log_rows.append(json.dumps({
+                        "genes": list(genes_key),
+                        "purity": None if bad else round(float(m.purity), 6),
+                        "recovery": None if bad else round(float(m.recovery), 6),
+                        "obj": None if bad else round(float(obj), 4),
+                        "viol": None if bad else round(ind["viol"], 6),
+                    }))
+            if eval_log_path and log_rows:
+                with open(eval_log_path, "a", encoding="utf-8") as f:
+                    f.write("\n".join(log_rows) + "\n")
             total += len(inds)
         return total
 
