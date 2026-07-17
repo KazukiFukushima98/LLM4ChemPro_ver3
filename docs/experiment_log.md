@@ -166,3 +166,42 @@ ARCHITECTURE 12.6）との比較**。
 真空仕事が大幅減の見込み）。
 
 詳細：`algorithm/runs/run30/HANDOFF.md`（run のアーカイブ前の所在）。
+
+---
+
+## baseline 比較・第1弾（2026-07-17）— lee3 全結合×一括 GA は feasibility とコストを両立できず
+
+**プロトコル（ユーザ決定 2026-07-16/17）**：一括最適化側は wall-clock 基準 — 集団数を固定し
+**6.5h の世代境界打ち切り**（進行中の世代は完走、`ga.max_wall_sec`、`40f216c`）。集団数は
+pop 40 / 100 の2パターンで「集団数のせいでない」ことを示す。SS は 3段全結合（ss_lee3、
+binary 24・連続 12・有効配線 4^6=4096）と 4段全結合（未作成）。seed は各設定 3+ を予定。
+
+**結果（lee3 × pop 40、seed 1、いずれも ~6.5h）**：
+
+| | SST run30 | GA penalty 法 | GA Deb 規則 |
+|---|---|---|---|
+| feasible 到達 | ✓ 3.3h | **✗（6.65h・3,222評価でゼロ）** | ✓ 5.1h（Gen 66） |
+| purity / recovery | 95.1 / 90.2 | 85.6 / 82.8（best が infeasible） | 95.8 / 90.7 |
+| best feasible コスト | **67.15 $/t** | — | **735.63 $/t（SST の 11 倍）** |
+| 比エネルギー | 530 kWh/t | — | 10,226 kWh/t（19 倍） |
+| 評価数 | 1,244 | 3,222 | 2,895 |
+
+**確定知見**：
+1. **penalty 法の罠が実戦で再現**：economics 由来の実効ペナルティ（~84 $/短絡単位）では
+   「安い infeasible」（52.9 $/t・違反 0.166）が fitness 上勝ち、GA は feasible を出す動機を持たない。
+   penalty 込み best_fitness=66.8 を「run30 に迫る」と誤読しかけた（run17 と同じ軸違い）。
+2. **対策として GA 選抜を Deb の feasibility 規則に変更**（`33e24c1`、パラメータフリー、違反量は
+   CBO bootstrap と同一の合計 shortfall、BAD=∞。gen_log に min_shortfall / feasible_obj_min を記録）。
+   Deb 版は shortfall を単調に詰めて feasible に到達したが、**残り 1.4h でコストは 1 ドルも下がらず**
+   735.63 のまま打ち切り。
+3. **結論（1 seed 時点）**：同一 wall-clock の一括 GA は「feasible ゼロ（penalty）」か
+   「feasible だが経済的に破綻（Deb）」の二択で、構造発見＋feasible 化＋コスト磨きを 6.1h で
+   完了する SST と土俵が違う。3段全結合に feasible 配線自体は存在する（=run30 の「3段では届かない」
+   は SST の候補配線内の話）ことも判明 — SST の配線候補生成の改善余地として記録。
+4. **副次**：全結合トポロジーは wedge を踏みやすい（Deb 版で 33 回・99 分=予算の 25% 損失。
+   run30 は 60 分）。荒い配線の Aspen 収束性が原因とみられ、比較の際は wedge 損失も併記する。
+
+**残作業**：pop 100 × lee3、4段全結合 seed（ss_lee4.json）作成 → lee4 × pop 40/100、
+BO baseline の wall-clock 対応、seed 追加（統計）。
+run 名規約：`baseline_{ss}_{ga|bo}_{deb|penalty}_pop{N}[_seed{S}]`（penalty 初回のみ
+旧名 `baseline_lee3_ga_pop40`）。

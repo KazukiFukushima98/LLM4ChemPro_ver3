@@ -20,9 +20,17 @@
 
 **ユーザ決定（2026-07-16）**：run30 の結果で**論文執筆に進む**。
 
+**baseline 比較・第1弾完了（2026-07-17）**：wall-clock 6.5h 世代境界打ち切りプロトコルで
+lee3 全結合 × GA pop40 を2方式実施。penalty 法は feasible ゼロ（best が purity 85.6/recovery 82.8 の
+infeasible）、Deb 規則版（`33e24c1`）は 5.1h で feasible 到達も **735.63 $/t（SST の 11 倍）**で
+コストを磨けず打ち切り。SST run30（67.15 $/t・6.1h）の優位が 1 seed 時点で明確。
+詳細は experiment_log.md の baseline 比較・第1弾節。
+
 **次の作業**：
-1. **baseline 比較（12.6）**：新仕様で ss_lee2/ss_lee3 の一括最適化（GA 等）vs SST（run30）の比較
-2. 論文図版：run30 best 構造の P&ID 図（scratch/make_run26_best_figure.py を流用）
+1. baseline 続き：pop 100 × lee3（Deb）、**4段全結合 seed（ss_lee4.json）作成**→ lee4 × pop 40/100、
+   BO baseline の wall-clock 対応、seed 追加（統計、各設定 3+）
+2. 論文図版：run30 best 構造の P&ID 図（scratch/make_run26_best_figure.py を流用）、
+   時間内訳図に GA バーを追加（docs/run30_time_breakdown.json の bars に追記）
 3. HANDOFF 提言の検討：① BO 予算増強/獲得関数改良（CEI を最安点に安定させる）、
    ② campaign 定義（1.1 bar 上限）の再考
 4. 終了 run のアーカイブ（run30 をルート runs/ へ、run28/29 は破棄処分の確認）
