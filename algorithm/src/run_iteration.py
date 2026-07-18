@@ -360,6 +360,12 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
     ss = T.load_ss(ss_path)
     T.save_ss(ss, os.path.join(iter_dir, "ss_snapshot.json"))
 
+    # Per-evaluation JSONL log (2026-07-18, structure-space map / constraint-plane
+    # figures): every inner-loop evaluation of this iteration is appended to the
+    # iteration directory. Consumed by bo.py (records "bits"); optimizers that do
+    # not read the key simply ignore it.
+    case["eval_log_path"] = os.path.join(iter_dir, "eval_log.jsonl")
+
     bin_vars  = binary_variables(ss)
     cont_vars = continuous_variables(ss, case.get("membrane_model"))
     print(f"\n[1] SS: {len(ss['vertices'])} vertices, units={list(ss['units'])}")

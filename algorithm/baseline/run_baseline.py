@@ -41,6 +41,7 @@ import argparse
 import itertools
 import json
 import os
+import random
 import shutil
 import sys
 from typing import Any
@@ -135,6 +136,69 @@ def patch_bo_for_onehot(ss: dict[str, Any], seed: int) -> None:
           f"(avoiding the 2^{len(T.binary_variables(ss))} exhaustive enumeration)")
 
 
+def patch_bo_sampled_onehot(ss: dict[str, Any], seed: int, k: int) -> None:
+    """One-hot injection for spaces too large to enumerate (lee4: 5^8 = 390,625).
+
+    Instead of the full Cartesian product (memory- and acqf-cost-prohibitive: the
+    acquisition is optimized once per fixed-features combination, ~30 h/batch at
+    lee4 scale), every acquisition call sees k freshly sampled valid one-hot
+    combinations — i.e. the same per-batch acquisition budget as the lee3 full
+    enumeration when k=4096, at the price of seeing ~1% of the wiring space per
+    batch. Protocol decision (provisional) 2026-07-17, recorded in COORDINATION.md.
+    """
+    from ga_onehot import onehot_groups
+
+    import bo as bo_mod
+
+    bin_vars = T.binary_variables(ss)
+    groups = onehot_groups(ss)
+    rng = random.Random(seed * 6151 + 3)
+
+    def gen_combos(n: int) -> list[dict[int, float]]:
+        seen: set[tuple] = set()
+        while len(seen) < n:
+            seen.add(tuple(rng.randrange(len(g)) for g in groups))
+        out = []
+        for picks in seen:
+            ff = {i: 0.0 for i in range(len(bin_vars))}
+            for g, choice in zip(groups, picks):
+                ff[g[choice]] = 1.0
+            out.append(ff)
+        return out
+
+    assert_all_buildable(ss, gen_combos(128))
+
+    bo_mod._build_fixed_features = lambda _ss, _bin_vars: gen_combos(k)
+
+    orig_sobol = bo_mod._sobol_initial
+    init_rng = random.Random(seed * 7919 + 1)
+
+    def sobol_onehot(n_init, bounds, n_bin, sobol_seed):
+        x = orig_sobol(n_init, bounds, n_bin, sobol_seed)
+        if n_bin > 0:
+            init_combos = gen_combos(max(n_init, 1))
+            for row in range(x.shape[0]):
+                ff = init_combos[init_rng.randrange(len(init_combos))]
+                for i in range(n_bin):
+                    x[row, i] = ff[i]
+        return x
+
+    bo_mod._sobol_initial = sobol_onehot
+
+    orig_acqf = bo_mod.optimize_acqf_mixed
+
+    def sampled_acqf(*args, **kw):
+        kw["fixed_features_list"] = gen_combos(k)
+        return orig_acqf(*args, **kw)
+
+    bo_mod.optimize_acqf_mixed = sampled_acqf
+    total = 1
+    for g in groups:
+        total *= len(g)
+    print(f"[baseline] BO sampled one-hot injection: {k} of {total} valid "
+          f"combination(s) resampled per acquisition call")
+
+
 # =========================================================
 # Execution
 # =========================================================
@@ -153,6 +217,10 @@ def main() -> None:
     parser.add_argument("--selection", choices=["deb", "penalty"], default="deb",
                         help="GA selection rule: Deb's parameter-free feasibility rule "
                              "(default) or the legacy penalized fitness")
+    parser.add_argument("--bo-sample-combos", type=int, default=None,
+                        help="BO only: resample this many valid one-hot combinations per "
+                             "acquisition call instead of enumerating all of them "
+                             "(required for lee4-scale spaces; 4096 = the lee3 budget)")
     parser.add_argument("--max-hours", type=float, default=None,
                         help="wall-clock budget; the GA stops at the first generation "
                              "boundary past this. With it, n_gen is only a safety cap.")
@@ -164,6 +232,8 @@ def main() -> None:
     run_name = f"baseline_{args.ss}_{args.optimizer}"
     if args.optimizer == "ga":
         run_name += f"_{args.selection}"
+    if args.optimizer == "bo" and args.bo_sample_combos is not None:
+        run_name += f"_k{args.bo_sample_combos}"
     if args.pop is not None:
         run_name += f"_pop{args.pop}"
     if args.seed != 1:
@@ -190,8 +260,6 @@ def main() -> None:
     else:
         case["ga"] = dict(PILOT_GA if args.pilot else FULL_GA)
         case["ga"]["selection"] = args.selection
-        # Per-evaluation JSONL log (structure-space map / constraint-plane figures)
-        case["eval_log_path"] = os.path.join(base_dir, "eval_log.jsonl")
         if args.pop is not None:
             case["ga"]["pop_size"] = args.pop
         if args.max_hours is not None:
@@ -200,6 +268,11 @@ def main() -> None:
             # budget can reach (pilot keeps its small n_gen for quick plumbing checks)
             if not args.pilot:
                 case["ga"]["n_gen"] = 100_000
+
+    # Per-evaluation JSONL log (structure-space map / constraint-plane figures):
+    # run_iteration injects case["eval_log_path"] = <iter_dir>/eval_log.jsonl for
+    # every optimizer, so both GA ("genes") and BO ("bits") runs are logged there.
+    # (GA runs before 2026-07-18 wrote to <base_dir>/eval_log.jsonl instead.)
 
     ss = T.load_ss(seed_path)
     n_bin = len(T.binary_variables(ss))
@@ -216,7 +289,10 @@ def main() -> None:
 
     # Runtime substitution (confined to this script; src is unchanged)
     if args.optimizer == "bo":
-        patch_bo_for_onehot(ss, args.seed)
+        if args.bo_sample_combos is not None:
+            patch_bo_sampled_onehot(ss, args.seed, args.bo_sample_combos)
+        else:
+            patch_bo_for_onehot(ss, args.seed)
     else:
         import ga_onehot
         RI.run_ga = ga_onehot.run_ga_onehot

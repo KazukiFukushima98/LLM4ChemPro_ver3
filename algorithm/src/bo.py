@@ -60,6 +60,7 @@ file are used.
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import sys
 import time
@@ -504,6 +505,34 @@ def run_bo(
     log_scale_on = not _is_off(bo_cfg.get("log_scale_inputs", "on"))
     patience     = int(bo_cfg.get("patience", 10))
     max_wall_sec = float(bo_cfg.get("max_wall_sec", 0) or 0)
+    # Per-evaluation log (2026-07-18, structure-space map / constraint-plane figures):
+    # if case["eval_log_path"] is set, every evaluated point appends one JSONL record
+    # {bits, purity, recovery, obj, viol} (BAD -> nulls). Absent = off (no behavior
+    # change). The GA-side counterpart (ga_onehot) logs "genes" (one-hot choice per
+    # group); here the raw binary vector "bits" is logged instead — convert via the
+    # one-hot groups when merging the two.
+    eval_log_path = case.get("eval_log_path")
+
+    def _log_evals(x_np: np.ndarray, o_arr: np.ndarray,
+                   p_arr: np.ndarray, r_arr: np.ndarray, v_mask: np.ndarray) -> None:
+        if not eval_log_path:
+            return
+        rows = []
+        for i in range(x_np.shape[0]):
+            bits = [int(round(float(x_np[i, k]))) for k in range(n_bin)]
+            if bool(v_mask[i]):
+                viol = (max(0.0, purity_min - float(p_arr[i]))
+                        + max(0.0, recovery_min - float(r_arr[i])))
+                rows.append(json.dumps({"bits": bits,
+                                        "purity": round(float(p_arr[i]), 6),
+                                        "recovery": round(float(r_arr[i]), 6),
+                                        "obj": round(float(o_arr[i]), 4),
+                                        "viol": round(viol, 6)}))
+            else:
+                rows.append(json.dumps({"bits": bits, "purity": None,
+                                        "recovery": None, "obj": None, "viol": None}))
+        with open(eval_log_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(rows) + "\n")
     # Floor: never cut off before n_iter/3 iterations (12.5(c); prevents an early cutoff
     # during an initial plateau)
     tracker = _PhasePatience(patience, floor_iters=max(1, n_iter // 3))
@@ -551,6 +580,7 @@ def run_bo(
         _to_eval_space(train_x_np, log_mask), ss, bin_vars, cont_vars, n_bin, evaluator,
         retry_bad=retry_bad, objective_fn=objective_fn
     )
+    _log_evals(train_x_np, o_arr, p_arr, r_arr, v_mask)
     init_eval_sec = round(time.monotonic() - _t_init0, 2)   # wall time of the initial-sample evaluation
 
     # Move all observations to tensors (the GP gets the clipped objective; the logging fitness uses raw)
@@ -674,6 +704,7 @@ def run_bo(
             _to_eval_space(c_np, log_mask), ss, bin_vars, cont_vars, n_bin, evaluator,
             retry_bad=retry_bad, objective_fn=objective_fn
         )
+        _log_evals(c_np, new_o, new_p, new_r, new_v)
         t_eval_sec = round(time.monotonic() - _t_eval0, 2)
 
         # Accumulate the observations
