@@ -105,6 +105,14 @@ _BO_DEFAULTS: dict[str, Any] = {
     "n_init":  16,
     "n_iter":  40,
     "q_batch":  4,
+    # Wall-clock budget in seconds (baseline protocol 2026-07-18): stop at a BATCH
+    # BOUNDARY (checked before each iteration's GP fit / acqf optimization) once the
+    # elapsed time since the start of the optimization exceeds this. 0 = disabled
+    # (the default; the SST inner loop does not set it and is unaffected). The check
+    # is boundary-only, so a single over-long acquisition can overrun the limit —
+    # keep the per-batch acquisition cost bounded (e.g. the one-hot fixed-features
+    # list must stay in the ~4k range) when enabling this.
+    "max_wall_sec": 0,
     # Acquisition function for phase 1 (while there is no feasible observation):
     #   "shortfall": ignore energy and minimize only the constraint shortfall (default).
     #     Rationale: when every point is infeasible, the P(feasible) term of CEI flattens
@@ -495,6 +503,7 @@ def run_bo(
     retry_bad    = int(bo_cfg.get("retry_bad", 1))
     log_scale_on = not _is_off(bo_cfg.get("log_scale_inputs", "on"))
     patience     = int(bo_cfg.get("patience", 10))
+    max_wall_sec = float(bo_cfg.get("max_wall_sec", 0) or 0)
     # Floor: never cut off before n_iter/3 iterations (12.5(c); prevents an early cutoff
     # during an initial plateau)
     tracker = _PhasePatience(patience, floor_iters=max(1, n_iter // 3))
@@ -556,6 +565,15 @@ def run_bo(
     objective = LinearMCObjective(weights=torch.tensor([1.0, 0.0, 0.0], dtype=dtype, device=device))
 
     for it in range(n_iter):
+        elapsed = time.monotonic() - t0
+        if max_wall_sec and elapsed >= max_wall_sec:
+            if gen_log:
+                gen_log[-1]["early_stop"] = (
+                    f"wall_clock {elapsed / 3600:.2f}h >= {max_wall_sec / 3600:.2f}h"
+                )
+            print(f"  [CBO] wall-clock limit reached at batch boundary "
+                  f"({elapsed / 3600:.2f}h >= {max_wall_sec / 3600:.2f}h) -> stop")
+            break
         o_capped = _clip_bad_energy(all_o_raw, all_v)   # objective value (same clipping for energy/cost)
         feasible_mask = (all_p_raw >= purity_min) & (all_r_raw >= recovery_min) & all_v
 

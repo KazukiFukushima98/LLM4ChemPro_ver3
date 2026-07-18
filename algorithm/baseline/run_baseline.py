@@ -182,6 +182,11 @@ def main() -> None:
     case["optimizer"] = args.optimizer
     if args.optimizer == "bo":
         case["bo"] = dict(PILOT_BO if args.pilot else FULL_BO)
+        if args.max_hours is not None:
+            case["bo"]["max_wall_sec"] = args.max_hours * 3600.0
+            # In wall-clock mode n_iter is only a safety cap (patience is already 0)
+            if not args.pilot:
+                case["bo"]["n_iter"] = 100_000
     else:
         case["ga"] = dict(PILOT_GA if args.pilot else FULL_GA)
         case["ga"]["selection"] = args.selection
@@ -199,8 +204,9 @@ def main() -> None:
     ss = T.load_ss(seed_path)
     n_bin = len(T.binary_variables(ss))
     n_cont = len(T.continuous_variables(ss, case.get("membrane_model")))
-    if args.optimizer == "ga" and args.max_hours is not None:
-        budget = f"wall-clock {args.max_hours}h (generation-boundary cutoff)"
+    if args.max_hours is not None:
+        boundary = "generation" if args.optimizer == "ga" else "batch"
+        budget = f"wall-clock {args.max_hours}h ({boundary}-boundary cutoff)"
     elif args.optimizer == "bo":
         budget = f"~{case['bo']['n_init'] + case['bo']['n_iter'] * case['bo']['q_batch']} evaluations"
     else:
