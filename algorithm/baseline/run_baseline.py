@@ -136,6 +136,49 @@ def patch_bo_for_onehot(ss: dict[str, Any], seed: int) -> None:
           f"(avoiding the 2^{len(T.binary_variables(ss))} exhaustive enumeration)")
 
 
+def patch_bo_sampling_acqf(ss: dict[str, Any], seed: int, pool: int) -> None:
+    """Replace the acquisition OPTIMIZATION with Monte Carlo scoring (sampling).
+
+    Orthodox alternative to the per-combination L-BFGS of optimize_acqf_mixed,
+    following Morlet-Espinosa & Flores-Tlacuahuac (AIChE J 2024): draw a pool of
+    random candidates (valid one-hot wiring x uniform continuous), SCORE them with
+    the acquisition function in one batched GPU forward pass, and take the top q.
+    Cost per batch drops from ~100 min (enumeration x L-BFGS) to seconds, at the
+    price of not polishing candidates with local optimization. Selecting the top q
+    by single-point score ignores the joint q-batch diversity term of qLogEI — the
+    standard Monte Carlo simplification, noted in the paper protocol.
+    """
+    import torch
+
+    from ga_onehot import onehot_groups
+
+    import bo as bo_mod
+    import numpy as np
+
+    bin_vars = T.binary_variables(ss)
+    groups = onehot_groups(ss)
+    n_bin = len(bin_vars)
+    rng = np.random.default_rng(seed * 9173 + 7)
+
+    def sampled_argmax(acq_function=None, bounds=None, q=None, **_kw):
+        d = bounds.shape[1]
+        lo, hi = bounds[0], bounds[1]
+        x = lo + (hi - lo) * torch.rand(pool, d, dtype=bounds.dtype, device=bounds.device)
+        bits = np.zeros((pool, n_bin), dtype=np.float64)
+        for g in groups:
+            choice = rng.integers(0, len(g), size=pool)
+            bits[np.arange(pool), np.asarray(g)[choice]] = 1.0
+        x[:, :n_bin] = torch.tensor(bits, dtype=bounds.dtype, device=bounds.device)
+        with torch.no_grad():
+            scores = acq_function(x.unsqueeze(1))
+        top = torch.topk(scores, int(q)).indices
+        return x[top], scores[top]
+
+    bo_mod.optimize_acqf_mixed = sampled_argmax
+    print(f"[baseline] BO sampling-scored acquisition (Morlet-Espinosa style): "
+          f"pool={pool} candidates per batch, no per-combination L-BFGS")
+
+
 def patch_bo_sampled_onehot(ss: dict[str, Any], seed: int, k: int) -> None:
     """One-hot injection for spaces too large to enumerate (lee4: 5^8 = 390,625).
 
@@ -221,6 +264,12 @@ def main() -> None:
                         help="BO only: resample this many valid one-hot combinations per "
                              "acquisition call instead of enumerating all of them "
                              "(required for lee4-scale spaces; 4096 = the lee3 budget)")
+    parser.add_argument("--bo-acqf", choices=["lbfgs", "sampling"], default="lbfgs",
+                        help="BO only: acquisition optimization. 'lbfgs' = per-combination "
+                             "optimize_acqf_mixed (default); 'sampling' = Monte Carlo "
+                             "scoring of a random candidate pool (Morlet-Espinosa style)")
+    parser.add_argument("--bo-pool", type=int, default=20000,
+                        help="candidate pool size per batch for --bo-acqf sampling")
     parser.add_argument("--max-hours", type=float, default=None,
                         help="wall-clock budget; the GA stops at the first generation "
                              "boundary past this. With it, n_gen is only a safety cap.")
@@ -234,6 +283,8 @@ def main() -> None:
         run_name += f"_{args.selection}"
     if args.optimizer == "bo" and args.bo_sample_combos is not None:
         run_name += f"_k{args.bo_sample_combos}"
+    if args.optimizer == "bo" and args.bo_acqf == "sampling":
+        run_name += "_sampling"
     if args.pop is not None:
         run_name += f"_pop{args.pop}"
     if args.seed != 1:
@@ -293,6 +344,10 @@ def main() -> None:
             patch_bo_sampled_onehot(ss, args.seed, args.bo_sample_combos)
         else:
             patch_bo_for_onehot(ss, args.seed)
+        # Applied last so its optimize_acqf_mixed override wins over the
+        # k-sampling patch's (whose combo list is then simply unused)
+        if args.bo_acqf == "sampling":
+            patch_bo_sampling_acqf(ss, args.seed, args.bo_pool)
     else:
         import ga_onehot
         RI.run_ga = ga_onehot.run_ga_onehot
