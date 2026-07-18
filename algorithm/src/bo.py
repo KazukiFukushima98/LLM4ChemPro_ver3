@@ -520,16 +520,20 @@ def run_bo(
         rows = []
         for i in range(x_np.shape[0]):
             bits = [int(round(float(x_np[i, k]))) for k in range(n_bin)]
+            # continuous part in the INTERNAL representation (log space for
+            # log-scaled dims) — the adaptive candidate sampling of the baseline
+            # consumes it in the same space it generates candidates in
+            x_cont = [round(float(v), 6) for v in x_np[i, n_bin:]]
             if bool(v_mask[i]):
                 viol = (max(0.0, purity_min - float(p_arr[i]))
                         + max(0.0, recovery_min - float(r_arr[i])))
-                rows.append(json.dumps({"bits": bits,
+                rows.append(json.dumps({"bits": bits, "x": x_cont,
                                         "purity": round(float(p_arr[i]), 6),
                                         "recovery": round(float(r_arr[i]), 6),
                                         "obj": round(float(o_arr[i]), 4),
                                         "viol": round(viol, 6)}))
             else:
-                rows.append(json.dumps({"bits": bits, "purity": None,
+                rows.append(json.dumps({"bits": bits, "x": x_cont, "purity": None,
                                         "recovery": None, "obj": None, "viol": None}))
         with open(eval_log_path, "a", encoding="utf-8") as f:
             f.write("\n".join(rows) + "\n")

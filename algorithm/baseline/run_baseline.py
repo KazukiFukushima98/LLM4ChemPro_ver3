@@ -136,7 +136,9 @@ def patch_bo_for_onehot(ss: dict[str, Any], seed: int) -> None:
           f"(avoiding the 2^{len(T.binary_variables(ss))} exhaustive enumeration)")
 
 
-def patch_bo_sampling_acqf(ss: dict[str, Any], seed: int, pool: int) -> None:
+def patch_bo_sampling_acqf(ss: dict[str, Any], seed: int, pool: int,
+                           mode: str = "uniform", base_dir: str | None = None,
+                           mix: float = 0.2) -> None:
     """Replace the acquisition OPTIMIZATION with Monte Carlo scoring (sampling).
 
     Orthodox alternative to the per-combination L-BFGS of optimize_acqf_mixed,
@@ -160,6 +162,49 @@ def patch_bo_sampling_acqf(ss: dict[str, Any], seed: int, pool: int) -> None:
     n_bin = len(bin_vars)
     rng = np.random.default_rng(seed * 9173 + 7)
 
+    def _read_eval_log() -> list[dict]:
+        """Latest iteration's eval_log.jsonl (written per evaluation by bo.py)."""
+        if not base_dir:
+            return []
+        import glob as _glob
+        paths = sorted(_glob.glob(os.path.join(base_dir, "iterations", "iter_*", "eval_log.jsonl")))
+        if not paths:
+            return []
+        rows = []
+        with open(paths[-1], encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        return [r for r in rows if r.get("purity") is not None and r.get("x") is not None]
+
+    def _mle_distributions(rows: list[dict]):
+        """MLE of the sampling distributions from the good points (phase-aware).
+
+        Good points: while nothing is feasible yet, the lowest-shortfall decile;
+        once feasible points exist, the cheapest feasible decile. Wiring: one
+        categorical (frequency table, Laplace alpha=1) per outlet group. Continuous:
+        per-dim normal (sample mean/std, std floored at 5% of the range).
+        """
+        feas = [r for r in rows if r["viol"] == 0.0]
+        ranked = (sorted(feas, key=lambda r: r["obj"]) if feas
+                  else sorted(rows, key=lambda r: r["viol"]))
+        good = ranked[:max(10, len(ranked) // 10)]
+        cat = []
+        for g in groups:
+            counts = np.ones(len(g))          # Laplace smoothing
+            for r in good:
+                for c, arc_idx in enumerate(g):
+                    if r["bits"][arc_idx] >= 0.5:
+                        counts[c] += 1.0
+                        break
+            cat.append(counts / counts.sum())
+        xs = np.array([r["x"] for r in good], dtype=np.float64)
+        mu = xs.mean(axis=0)
+        sd = xs.std(axis=0)
+        return cat, mu, sd
+
     def sampled_argmax(acq_function=None, bounds=None, q=None, **_kw):
         d = bounds.shape[1]
         lo, hi = bounds[0], bounds[1]
@@ -168,6 +213,22 @@ def patch_bo_sampling_acqf(ss: dict[str, Any], seed: int, pool: int) -> None:
         for g in groups:
             choice = rng.integers(0, len(g), size=pool)
             bits[np.arange(pool), np.asarray(g)[choice]] = 1.0
+
+        rows = _read_eval_log() if mode == "mle" else []
+        if rows:
+            cat, mu, sd = _mle_distributions(rows)
+            n_mle = int(pool * (1.0 - mix))     # the rest stays uniform (exploration floor)
+            for gi, g in enumerate(groups):
+                choice = rng.choice(len(g), size=n_mle, p=cat[gi])
+                bits[:n_mle, np.asarray(g)] = 0.0
+                bits[np.arange(n_mle), np.asarray(g)[choice]] = 1.0
+            lo_np = lo.detach().cpu().numpy()[n_bin:]
+            hi_np = hi.detach().cpu().numpy()[n_bin:]
+            sd = np.maximum(sd, 0.05 * (hi_np - lo_np))
+            xc = rng.normal(mu, sd, size=(n_mle, d - n_bin))
+            xc = np.clip(xc, lo_np, hi_np)
+            x[:n_mle, n_bin:] = torch.tensor(xc, dtype=bounds.dtype, device=bounds.device)
+
         x[:, :n_bin] = torch.tensor(bits, dtype=bounds.dtype, device=bounds.device)
         with torch.no_grad():
             scores = acq_function(x.unsqueeze(1))
@@ -176,7 +237,10 @@ def patch_bo_sampling_acqf(ss: dict[str, Any], seed: int, pool: int) -> None:
 
     bo_mod.optimize_acqf_mixed = sampled_argmax
     print(f"[baseline] BO sampling-scored acquisition (Morlet-Espinosa style): "
-          f"pool={pool} candidates per batch, no per-combination L-BFGS")
+          f"pool={pool}, mode={mode}"
+          + (f" (MLE-adapted {int((1 - mix) * 100)}% + uniform {int(mix * 100)}%)"
+             if mode == "mle" else "")
+          + ", no per-combination L-BFGS")
 
 
 def patch_bo_sampled_onehot(ss: dict[str, Any], seed: int, k: int) -> None:
@@ -270,6 +334,10 @@ def main() -> None:
                              "scoring of a random candidate pool (Morlet-Espinosa style)")
     parser.add_argument("--bo-pool", type=int, default=20000,
                         help="candidate pool size per batch for --bo-acqf sampling")
+    parser.add_argument("--bo-sampling", choices=["uniform", "mle"], default="uniform",
+                        help="candidate distribution for --bo-acqf sampling: 'uniform', or "
+                             "'mle' = phase-aware MLE-adapted categorical/normal "
+                             "(80%% adapted + 20%% uniform exploration floor)")
     parser.add_argument("--max-hours", type=float, default=None,
                         help="wall-clock budget; the GA stops at the first generation "
                              "boundary past this. With it, n_gen is only a safety cap.")
@@ -284,7 +352,7 @@ def main() -> None:
     if args.optimizer == "bo" and args.bo_sample_combos is not None:
         run_name += f"_k{args.bo_sample_combos}"
     if args.optimizer == "bo" and args.bo_acqf == "sampling":
-        run_name += "_sampling"
+        run_name += f"_sampling_{args.bo_sampling}"
     if args.pop is not None:
         run_name += f"_pop{args.pop}"
     if args.seed != 1:
@@ -347,7 +415,8 @@ def main() -> None:
         # Applied last so its optimize_acqf_mixed override wins over the
         # k-sampling patch's (whose combo list is then simply unused)
         if args.bo_acqf == "sampling":
-            patch_bo_sampling_acqf(ss, args.seed, args.bo_pool)
+            patch_bo_sampling_acqf(ss, args.seed, args.bo_pool,
+                                   mode=args.bo_sampling, base_dir=base_dir)
     else:
         import ga_onehot
         RI.run_ga = ga_onehot.run_ga_onehot
