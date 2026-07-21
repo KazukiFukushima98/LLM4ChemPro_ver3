@@ -1,0 +1,42 @@
+{
+  "claudeMdExcludes": ["**/LLM4ChemPro_ver3/CLAUDE.md"],
+  "permissions": {
+    "allow": [
+      "Bash(uv run python evaluate.py*)",
+      "Bash(uv run python -u evaluate.py*)",
+      "Bash(uv run python scratch/*)",
+      "Bash(ls *)",
+      "Bash(cat runs/*)",
+      "Bash(cat proposal*)",
+      "Bash(cat PROBLEM.md)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(mkdir *)",
+      "Bash(date*)",
+      "Write(runs/**)",
+      "Edit(runs/**)",
+      "Write(proposal*.json)",
+      "Edit(proposal*.json)",
+      "Write(scratch/**)",
+      "Edit(scratch/**)"
+    ],
+    "deny": [
+      "Read(../CLAUDE.md)",
+      "Read(../ARCHITECTURE.md)",
+      "Read(../algorithm/**)",
+      "Read(../docs/**)",
+      "Read(../runs/**)",
+      "Read(../reference/**)",
+      "Read(evaluate.py)",
+      "Edit(../**)",
+      "Write(../**)",
+      "Edit(evaluate.py)",
+      "Edit(PROBLEM.md)",
+      "Edit(CLAUDE.md)",
+      "Write(evaluate.py)",
+      "Write(PROBLEM.md)",
+      "Write(CLAUDE.md)"
+    ]
+  }
+}
