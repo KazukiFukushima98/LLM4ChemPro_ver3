@@ -267,7 +267,7 @@ def main() -> None:
             "constraint_shortfall": round(shortfall, 4),
             "cost_usd_per_tCO2": round(cost, 2),
             "specific_energy_kWh_per_tCO2": round(m.specific_energy, 1),
-            "energy_breakdown_kW": {k: round(v, 1) for k, v in (detailed.energy_breakdown or {}).items()},
+            "energy_breakdown_kW": {k: round(v, 1) for k, v in (m.energy_breakdown or {}).items()},
             "streams": detailed.stream_results,
         }
 
