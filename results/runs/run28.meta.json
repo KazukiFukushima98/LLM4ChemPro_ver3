@@ -1,0 +1,13 @@
+{
+  "run": "run28",
+  "kind": "sst",
+  "n_iterations": 3,
+  "source_dir": "/Users/kazuki/projects/LLM4ChemPro_ver3/algorithm/runs/run28",
+  "extracted_at": "2026-07-22T15:10:50+00:00",
+  "hostname": "KazukinoMacBook-Pro.local",
+  "git_commit": "424cd081f097a8110555f929d9a32fc47a2488df",
+  "files": {
+    "run28_iterations.csv": 3,
+    "run28_progress.csv": 112
+  }
+}

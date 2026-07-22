@@ -1,0 +1,54 @@
+{
+  "run": "baseline_lee3_ga_pop40",
+  "kind": "baseline",
+  "n_iterations": 1,
+  "source_dir": "/Users/kazuki/projects/LLM4ChemPro_ver3/algorithm/runs/baseline_lee3_ga_pop40",
+  "extracted_at": "2026-07-22T15:10:50+00:00",
+  "hostname": "KazukinoMacBook-Pro.local",
+  "git_commit": "424cd081f097a8110555f929d9a32fc47a2488df",
+  "files": {
+    "baseline_lee3_ga_pop40_iterations.csv": 1,
+    "baseline_lee3_ga_pop40_progress.csv": 101
+  },
+  "baseline_summary": {
+    "run": "baseline_lee3_ga_pop40",
+    "ss": "lee3",
+    "optimizer": "ga",
+    "pilot": false,
+    "budget": "wall-clock 6.5h (generation-boundary cutoff)",
+    "n_evaluations": 3222,
+    "performance": {
+      "CO2_purity": 0.856449937,
+      "CO2_recovery": 0.8280021168764865,
+      "specific_energy_kWh_tCO2": 587.0256034253597,
+      "total_compressor_kW": 223273.88126207,
+      "cost_usd_per_tCO2": 52.89000101747775
+    },
+    "active_candidates": {
+      "q_1": 0,
+      "q_2": 0,
+      "q_3": 0,
+      "q_4": 1,
+      "q_5": 0,
+      "q_6": 1,
+      "q_7": 0,
+      "q_8": 0,
+      "q_9": 1,
+      "q_10": 0,
+      "q_11": 0,
+      "q_12": 0,
+      "q_13": 0,
+      "q_14": 0,
+      "q_15": 0,
+      "q_16": 1,
+      "q_17": 0,
+      "q_18": 0,
+      "q_19": 0,
+      "q_20": 1,
+      "q_21": 0,
+      "q_22": 0,
+      "q_23": 0,
+      "q_24": 1
+    }
+  }
+}

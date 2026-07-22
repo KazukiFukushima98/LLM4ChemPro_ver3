@@ -1,0 +1,54 @@
+{
+  "run": "baseline_lee3_blower_bo",
+  "kind": "baseline",
+  "n_iterations": 1,
+  "source_dir": "/Users/kazuki/projects/LLM4ChemPro_ver3/algorithm/runs/baseline_lee3_blower_bo",
+  "extracted_at": "2026-07-22T15:10:50+00:00",
+  "hostname": "KazukinoMacBook-Pro.local",
+  "git_commit": "424cd081f097a8110555f929d9a32fc47a2488df",
+  "files": {
+    "baseline_lee3_blower_bo_iterations.csv": 1,
+    "baseline_lee3_blower_bo_progress.csv": 5
+  },
+  "baseline_summary": {
+    "run": "baseline_lee3_blower_bo",
+    "ss": "lee3_blower",
+    "optimizer": "bo",
+    "pilot": false,
+    "budget": "wall-clock 6.5h (batch-boundary cutoff)",
+    "n_evaluations": 201,
+    "performance": {
+      "CO2_purity": 0.329331471,
+      "CO2_recovery": 0.7865593870062099,
+      "specific_energy_kWh_tCO2": 233.35124988580316,
+      "total_compressor_kW": 84312.32800000001,
+      "cost_usd_per_tCO2": 28.55955202575239
+    },
+    "active_candidates": {
+      "q_1": 0,
+      "q_2": 0,
+      "q_3": 0,
+      "q_4": 1,
+      "q_5": 0,
+      "q_6": 0,
+      "q_7": 0,
+      "q_8": 1,
+      "q_9": 0,
+      "q_10": 0,
+      "q_11": 1,
+      "q_12": 0,
+      "q_13": 0,
+      "q_14": 1,
+      "q_15": 0,
+      "q_16": 0,
+      "q_17": 0,
+      "q_18": 1,
+      "q_19": 0,
+      "q_20": 0,
+      "q_21": 0,
+      "q_22": 0,
+      "q_23": 0,
+      "q_24": 1
+    }
+  }
+}

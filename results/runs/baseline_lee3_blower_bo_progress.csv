@@ -1,0 +1,6 @@
+run,iteration,gen,phase,t,best_fitness
+baseline_lee3_blower_bo,1,1,bootstrap,7945.5,417.30519711712145
+baseline_lee3_blower_bo,1,2,bootstrap,12397.5,387.5351986983741
+baseline_lee3_blower_bo,1,3,bootstrap,16001.1,382.50232862010756
+baseline_lee3_blower_bo,1,4,bootstrap,20010.6,355.7878990052724
+baseline_lee3_blower_bo,1,5,bootstrap,24468.6,355.7878990052724

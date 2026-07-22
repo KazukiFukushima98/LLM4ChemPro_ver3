@@ -1,0 +1,5 @@
+run,iteration,gen,phase,t,best_fitness
+baseline_lee4_blower_bo_k64_pilot,1,1,bootstrap,439.3,1000000.0
+baseline_lee4_blower_bo_k64_pilot,1,2,bootstrap,522.7,2670.0782719527742
+baseline_lee4_blower_bo_k64_pilot,1,3,bootstrap,643.2,2670.0782719527742
+baseline_lee4_blower_bo_k64_pilot,1,4,bootstrap,776.3,2670.0782719527742

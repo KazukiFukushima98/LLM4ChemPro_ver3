@@ -1,0 +1,3 @@
+run,kind,iteration,optimizer,seed,n_evaluations,CO2_purity,CO2_recovery,specific_energy_kWh_tCO2,total_compressor_kW,cost_usd_per_tCO2,inner_opt_sec,n_wedges
+run27,sst,1,bo,1,10,0.659880823,0.6465863767024811,394.8444820098811,117274.0853,49.98730608798881,50.8,0
+run27,sst,2,bo,2,12,0.871252856,0.20165238876580355,234.89259723062827,21758.158304,103.51734010430856,120.9,0

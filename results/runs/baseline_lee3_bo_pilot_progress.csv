@@ -1,0 +1,5 @@
+run,iteration,gen,phase,t,best_fitness
+baseline_lee3_bo_pilot,1,1,bootstrap,,402.99773655544215
+baseline_lee3_bo_pilot,1,2,bootstrap,,402.99773655544215
+baseline_lee3_bo_pilot,1,3,bootstrap,,369.22258651639186
+baseline_lee3_bo_pilot,1,4,bootstrap,,369.22258651639186

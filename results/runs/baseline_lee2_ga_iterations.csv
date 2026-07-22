@@ -1,0 +1,2 @@
+run,kind,iteration,optimizer,seed,n_evaluations,CO2_purity,CO2_recovery,specific_energy_kWh_tCO2,total_compressor_kW,cost_usd_per_tCO2,inner_opt_sec,n_wedges
+baseline_lee2_ga,baseline,1,ga,1,1601,0.684241393,0.5898878860705377,233.22968122023772,72920.6673,40.01805776145944,,

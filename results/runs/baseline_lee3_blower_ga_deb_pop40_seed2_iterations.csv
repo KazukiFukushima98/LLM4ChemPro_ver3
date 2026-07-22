@@ -1,0 +1,2 @@
+run,kind,iteration,optimizer,seed,n_evaluations,CO2_purity,CO2_recovery,specific_energy_kWh_tCO2,total_compressor_kW,cost_usd_per_tCO2,inner_opt_sec,n_wedges
+baseline_lee3_blower_ga_deb_pop40_seed2,baseline,1,ga,1,3151,0.957052099,0.8188432831317513,1191.2930949330082,448093.708939,117.3074294341631,23547.1,37

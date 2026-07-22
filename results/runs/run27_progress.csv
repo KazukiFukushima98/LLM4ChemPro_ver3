@@ -1,0 +1,7 @@
+run,iteration,gen,phase,t,best_fitness
+run27,1,1,bootstrap,26.0,271.08493166226054
+run27,1,2,bootstrap,37.1,198.374907423923
+run27,1,3,bootstrap,48.5,198.374907423923
+run27,2,1,bootstrap,58.4,1052.092151625393
+run27,2,2,bootstrap,80.7,609.771521288052
+run27,2,3,bootstrap,118.7,597.4078389089736

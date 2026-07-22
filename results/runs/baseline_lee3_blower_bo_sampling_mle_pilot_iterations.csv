@@ -1,0 +1,2 @@
+run,kind,iteration,optimizer,seed,n_evaluations,CO2_purity,CO2_recovery,specific_energy_kWh_tCO2,total_compressor_kW,cost_usd_per_tCO2,inner_opt_sec,n_wedges
+baseline_lee3_blower_bo_sampling_mle_pilot,baseline,1,bo,1,14,0.279543257,0.27974618459354533,142.88372927951806,18361.00208911,53.284715494865026,295.5,1

@@ -1,0 +1,42 @@
+{
+  "run": "baseline_lee2_ga_pilot",
+  "kind": "baseline",
+  "n_iterations": 1,
+  "source_dir": "/Users/kazuki/projects/LLM4ChemPro_ver3/algorithm/runs/baseline_lee2_ga_pilot",
+  "extracted_at": "2026-07-22T15:10:50+00:00",
+  "hostname": "KazukinoMacBook-Pro.local",
+  "git_commit": "424cd081f097a8110555f929d9a32fc47a2488df",
+  "files": {
+    "baseline_lee2_ga_pilot_iterations.csv": 1,
+    "baseline_lee2_ga_pilot_progress.csv": 3
+  },
+  "baseline_summary": {
+    "run": "baseline_lee2_ga_pilot",
+    "ss": "lee2",
+    "optimizer": "ga",
+    "pilot": true,
+    "budget": 24,
+    "n_evaluations": 18,
+    "performance": {
+      "CO2_purity": 0.344265159,
+      "CO2_recovery": 0.17898982820094556,
+      "specific_energy_kWh_tCO2": 71.60123827870429,
+      "total_compressor_kW": 6792.7592458,
+      "cost_usd_per_tCO2": 33.37558777937689
+    },
+    "active_candidates": {
+      "q_1": 0,
+      "q_2": 0,
+      "q_3": 1,
+      "q_4": 0,
+      "q_5": 1,
+      "q_6": 0,
+      "q_7": 0,
+      "q_8": 0,
+      "q_9": 1,
+      "q_10": 0,
+      "q_11": 0,
+      "q_12": 1
+    }
+  }
+}
