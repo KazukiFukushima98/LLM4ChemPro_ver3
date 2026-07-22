@@ -1,0 +1,48 @@
+---
+title: "LLM-Driven Superstructure Transition"
+subtitle: "Membrane-based CO~2~ capture — progress report"
+author: "Kazuki Fukushima (Tohoku University)"
+format:
+  revealjs:
+    embed-resources: true
+    slide-number: true
+    theme: simple
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| label: setup
+from paperfigs import data, fig_cost_convergence, fig_method_comparison
+
+iterations = data.load_iterations()
+runs = data.load_runs()
+SST_RUNS = ["run25", "run26", "run30"]
+
+sst = runs[runs["run"].isin(SST_RUNS) & runs["feasible"]]
+best = sst.loc[sst["best_cost_usd_per_tCO2"].idxmin()]
+best_cost = f"{best['best_cost_usd_per_tCO2']:.1f}"
+```
+
+## Key result
+
+The SST agent autonomously reached **`{python} best_cost` \$/tCO~2~**
+(purity ≥ 0.95, recovery ≥ 0.90), discovering multi-stage cascades
+without a predefined superstructure.
+
+## Convergence
+
+```{python}
+#| label: fig-convergence-slide
+#| fig-cap: "Cost trajectory over SST iterations"
+fig_cost_convergence(iterations, runs=SST_RUNS)
+```
+
+## SST vs one-shot baselines
+
+```{python}
+#| label: fig-comparison-slide
+fig_method_comparison(runs)
+```

@@ -1,0 +1,79 @@
+---
+title: "LLM-Driven Superstructure Transition for the Synthesis of Membrane-Based CO~2~ Capture Processes"
+author:
+  - name: Kazuki Fukushima
+    affiliations:
+      - Tohoku University
+format:
+  html:
+    embed-resources: true
+  latex:
+    keep-tex: true
+    wrap: preserve
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+<!--
+本文のマスターは Overleaf 側にある(docs/design-brief.md 6節)。
+このファイルの役割:
+  - 図・表・数値をデータから自動生成し、生成された .tex / 図を Overleaf に送る
+  - 数値はすべてインライン展開(手で転記しない)
+  - 作図は src/paperfigs の関数を呼ぶだけにする(スライドと共用)
+-->
+
+```{python}
+#| label: setup
+from paperfigs import data, fig_cost_convergence, fig_method_comparison
+
+iterations = data.load_iterations()
+runs = data.load_runs()
+
+# 破棄 run(計測汚染・セッション切断: docs/COORDINATION.md 2026-07-16)と
+# 進行中 run は載せない。掲載対象は編集判断としてここで明示する。
+PAPER_SST_RUNS = ["run25", "run26", "run30"]
+
+sst = runs[runs["run"].isin(PAPER_SST_RUNS) & runs["feasible"]]
+best = sst.loc[sst["best_cost_usd_per_tCO2"].idxmin()]
+best_cost = f"{best['best_cost_usd_per_tCO2']:.2f}"
+best_run = best["run"]
+best_purity = f"{best['best_CO2_purity']:.3f}"
+best_recovery = f"{best['best_CO2_recovery']:.3f}"
+
+bl = runs[(runs["kind"] == "baseline") & runs["feasible"]]
+bl_best_cost = f"{bl['best_cost_usd_per_tCO2'].min():.2f}" if not bl.empty else "n/a"
+```
+
+# Introduction
+
+TODO: Overleaf のマスター本文に従う。ここには図表と結果段落の材料だけを置く。
+
+# Results
+
+The SST agent autonomously discovered feasible multi-stage membrane cascades.
+The best configuration (`{python} best_run`) achieved a capture cost of
+`{python} best_cost` \$/tCO~2~ at a purity of `{python} best_purity` and a
+recovery of `{python} best_recovery`, whereas the best one-shot baseline
+reached `{python} bl_best_cost` \$/tCO~2~ under the same wall-clock budget.
+
+```{python}
+#| label: fig-convergence
+#| fig-cap: "Cost trajectory over SST iterations. Open circles mark iterations satisfying both purity and recovery constraints."
+fig_cost_convergence(iterations, runs=PAPER_SST_RUNS)
+```
+
+```{python}
+#| label: fig-comparison
+#| fig-cap: "Best feasible capture cost per campaign: SST versus one-shot optimization baselines."
+fig_method_comparison(runs)
+```
+
+As shown in @fig-convergence, the outer-loop transitions move the search
+into feasible basins that one-shot optimization fails to reach
+(@fig-comparison).
+
+# Discussion
+
+TODO

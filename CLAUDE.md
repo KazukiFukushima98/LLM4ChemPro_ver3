@@ -71,6 +71,38 @@
 
 ---
 
+## 論文・スライドのビルド層(2026-07 追加)
+
+設計方針は `docs/design-brief.md`。計算(Windows 機の Aspen)と原稿ビルド(Mac)は完全分離。
+
+```
+algorithm/runs/            生 run データ(gitignore・計算ノード上が正本)
+    ↓ scripts/extract_runs.py   (標準ライブラリのみ・追記専用・既存runはスキップ)
+results/runs/              run単位の軽量CSV + meta.json(git追跡。上書き禁止)
+    ↓ scripts/aggregate.py
+results/aggregated/        iterations.parquet / progress.parquet / runs.csv(原稿が読む唯一の場所)
+    ↓
+paper/paper.qmd            論文(マスター本文は Overleaf。図表・数値の生成がここの役割)
+slides/*.qmd               スライド(revealjs・単一HTML)
+src/paperfigs/             共用作図関数(DataFrame in → Figure out。ファイル保存禁止)
+```
+
+守るべき規約:
+
+- **図は必ず `src/paperfigs` の関数で描く。** `.qmd` 内に matplotlib を直書きしない
+  (論文とスライドの図が食い違う事故を構造的に防ぐため)
+- **`results/runs/` の既存ファイルを書き換えない。** 追記専用。再抽出は `--force` を明示
+- **原稿は `results/aggregated/` だけを読む**(`paperfigs.data` 経由)。個別 run のファイルを直接読まない
+- ビルドは `make`(extract / aggregate / paper / slides / figures / freeze)。
+  依存解決済みなので必要な工程しか走らない
+- 投稿用の図は `scripts/export_figures.py` で所定名(fig1.pdf…)出力。チャンク生成名は使わない
+- 投稿時は `make freeze TAG=<tag>` → `SST_DATA_DIR=results/frozen/<tag>` でレンダリング → `git tag`
+- Mac では `uv sync --group docs`(ソルバー系 pywin32/torch はマーカーで自動除外)。
+  計算ノード(Windows)は従来どおり `uv sync`
+- Overleaf とはラウンド制(design-brief 6節)。レビュー期間中に .tex を送らない
+
+---
+
 ## 困ったときの優先順位
 
 1. `ARCHITECTURE.md` に答えがあるか確認する。
