@@ -1,5 +1,8 @@
-# --- Results (kept out of version control by design; see ARCHITECTURE.md) ---
-runs/
+# --- Raw run data (kept out of version control by design; see ARCHITECTURE.md) ---
+# ルート runs/(旧 run5〜21)と algorithm/runs/(現行)のみを除外する。
+# 抽出済みの軽量データ results/runs/ は追跡対象なので、無印の runs/ に戻さないこと。
+/runs/
+/algorithm/runs/
 
 # --- Scratch (一時利用・確認用・コミット禁止) ---
 algorithm/scratch/
@@ -33,3 +36,11 @@ reference/
 .DS_Store
 .idea/
 *.swp
+
+# --- Quarto レンダリング生成物(ソースは .qmd。生成物はコミットしない) ---
+.quarto/
+/paper/paper.html
+/paper/paper.tex
+/paper/paper_files/
+/slides/*.html
+/slides/*_files/
