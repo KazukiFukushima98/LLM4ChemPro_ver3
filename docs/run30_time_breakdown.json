@@ -1,0 +1,38 @@
+{
+  "_provenance": {
+    "run": "run30",
+    "method": "SST (Claude agent outer loop + CBO inner loop, Aspen evaluation)",
+    "date": "2026-07-16",
+    "note": "内訳は results.json の timing/gen_log 実測値（秒精度）: aspen_eval_min = evaluator の topology 評価 wall（wedge 損失を除く）、wedge_lost_min = ウォッチドッグ180sタイムアウトの損失、gp_fit_min / acq_opt_min = gen_log の t_fit / t_acq 合計（GPU上のGPフィットと獲得関数最適化）、detailed_eval_min = best の詳細評価、other_min = 残差（SSロード・サブプロセス起動・集計等）、sst_proposal_min = results.json 書き込みから次 iteration 開始（最終 iter は HANDOFF.md）までのファイルタイムスタンプ差。iteration の開始時刻はログヘッダ（分精度）のため other_min に±30秒程度の丸めが乗る。停止事故ゼロ・人間待ち混入なし。GA 等の baseline は同スキーマで bars に追加する。",
+    "start": "2026-07-16T16:47:00",
+    "end": "2026-07-16T22:54:27"
+  },
+  "unit": "minutes",
+  "components_stack_order": ["aspen_eval_min", "wedge_lost_min", "gp_fit_min", "acq_opt_min", "detailed_eval_min", "other_min", "sst_proposal_min"],
+  "components": {
+    "aspen_eval_min": "Aspen 評価（ビルド＋収束計算、正味）",
+    "wedge_lost_min": "Aspen wedge 損失（ウォッチドッグ 180s タイムアウト×回数）",
+    "gp_fit_min": "GP モデルフィット（GPU）",
+    "acq_opt_min": "獲得関数最適化（GPU）",
+    "detailed_eval_min": "best の詳細評価（stream/energy 回収）",
+    "other_min": "その他（SS ロード・サブプロセス起動・集計等の残差）",
+    "sst_proposal_min": "SST エージェントの結果分析・構造提案・apply_ss（最終 iter は HANDOFF 記録）"
+  },
+  "totals_min": { "aspen_eval": 100.5, "wedge_lost": 60.0, "gp_fit": 88.1, "acq_opt": 98.5, "detailed_eval": 1.3, "other": 5.8, "sst_proposal": 13.3, "total": 367.5 },
+  "bars": [
+    {
+      "label": "SST (run30)",
+      "total_min": 367.5,
+      "iterations": [
+        { "iter": 1, "move": "baseline (2-stage seed)",            "aspen_eval_min": 6.18,  "wedge_lost_min": 12.0,  "gp_fit_min": 0.31,  "acq_opt_min": 0.51,  "detailed_eval_min": 0.14, "other_min": 0.93, "sst_proposal_min": 1.92, "evaluations": 124 },
+        { "iter": 2, "move": "2 residue-vs-recycle toggle pairs",  "aspen_eval_min": 14.06, "wedge_lost_min": 21.01, "gp_fit_min": 12.22, "acq_opt_min": 8.79,  "detailed_eval_min": 0.15, "other_min": 1.08, "sst_proposal_min": 2.71, "evaluations": 171 },
+        { "iter": 3, "move": "+MEMB3 gated strip",                 "aspen_eval_min": 19.91, "wedge_lost_min": 3.0,   "gp_fit_min": 16.53, "acq_opt_min": 19.99, "detailed_eval_min": 0.16, "other_min": 0.69, "sst_proposal_min": 2.72, "evaluations": 205 },
+        { "iter": 4, "move": "lock candidates (0 binaries)",       "aspen_eval_min": 9.39,  "wedge_lost_min": 3.0,   "gp_fit_min": 1.11,  "acq_opt_min": 0.89,  "detailed_eval_min": 0.16, "other_min": 0.42, "sst_proposal_min": 2.04, "evaluations": 148 },
+        { "iter": 5, "move": "+MEMB4 gated deep-strip (feasible)", "aspen_eval_min": 17.81, "wedge_lost_min": 6.0,   "gp_fit_min": 23.1,  "acq_opt_min": 26.64, "detailed_eval_min": 0.18, "other_min": 0.36, "sst_proposal_min": 0.9,  "evaluations": 194 },
+        { "iter": 6, "move": "lock MEMB4 (cost-min)",              "aspen_eval_min": 8.17,  "wedge_lost_min": 3.0,   "gp_fit_min": 3.15,  "acq_opt_min": 4.31,  "detailed_eval_min": 0.19, "other_min": 1.01, "sst_proposal_min": 1.18, "evaluations": 108 },
+        { "iter": 7, "move": "V6 routing toggle (V9 vs V11)",      "aspen_eval_min": 14.17, "wedge_lost_min": 9.0,   "gp_fit_min": 26.32, "acq_opt_min": 30.94, "detailed_eval_min": 0.18, "other_min": 0.63, "sst_proposal_min": 0.76, "evaluations": 154 },
+        { "iter": 8, "move": "consolidate + confirm (converged)",  "aspen_eval_min": 10.79, "wedge_lost_min": 3.0,   "gp_fit_min": 5.35,  "acq_opt_min": 6.39,  "detailed_eval_min": 0.17, "other_min": 0.7,  "sst_proposal_min": 1.05, "evaluations": 140 }
+      ]
+    }
+  ]
+}
