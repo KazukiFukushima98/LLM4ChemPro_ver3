@@ -44,3 +44,7 @@ reference/
 /paper/paper_files/
 /slides/*.html
 /slides/*_files/
+
+# --- Quarto/VS Code プレビューの一時ファイル ---
+*.quarto_ipynb
+*.quarto_ipynb_*

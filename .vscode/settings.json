@@ -1,0 +1,16 @@
+{
+  // uv が作った .venv を既定の Python にする。
+  // これで Quarto プレビューのチャンク実行が paperfigs を import できる。
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+
+  // Quarto のレンダリングも同じ venv の Python を使わせる。
+  "quarto.render.pythonPath": "${workspaceFolder}/.venv/bin/python",
+
+  // 保存時に自動プレビュー更新(任意・好みで false に)
+  "quarto.render.previewType": "internal",
+
+  // 日本語コメントを多用するため、Unicode 警告の黄色い枠を消す
+  // (全角括弧・日本語を「紛らわしい文字」として囲む機能。このリポジトリでは不要)
+  "editor.unicodeHighlight.ambiguousCharacters": false,
+  "editor.unicodeHighlight.nonBasicASCII": false
+}
