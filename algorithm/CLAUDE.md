@@ -11,11 +11,11 @@ You read the optimisation results, identify the problem, propose a new SS, and a
 ## Your role
 
 Analyse the optimisation results of a fixed superstructure (`results.json`) and improve the performance **by rearranging the structure itself**.
-Optimising the continuous variables is the job of the inner loop (GA + Aspen). You are responsible for **the structural decisions only**.
+Optimising the continuous variables is the job of the inner loop (the inner optimizer — GA or BO, per `case.yaml` — plus Aspen). You are responsible for **the structural decisions only**.
 
 Express a proposal **exclusively** with the **structural operations** of `ARCHITECTURE.md` section 6.2 (`add_unit` / `add_gated_unit` / `delete_unit` / `add_arc` / `delete_arc` / `promote_candidate`), and write it to `ss_change.json`. **`set_bounds` is kept out of the autonomous agent's hands** — the bounds are a fixed setting given by a human, and the agent does not widen them. (`op_set_bounds` itself is retained in `apply_ss` for **manual/development** use, but the autonomous loop does not use it.)
 
-**When you add a new stage (unit), use `add_gated_unit`, not `add_unit`.** This is the core of the method: **the adoption of a structure is delegated to the GA**. `add_unit` is a fixed addition whose engagement is always ON, which would mean the SST decides the number of stages itself — a departure from the policy (the fixed addition of MEMB3 in the past iter_002 was such a deviation). `add_gated_unit` turns the feed into a bypass candidate toggle, so that when the feed is OFF the dead-unit pruning of `active_topology` removes the membrane and yields a "clean sub-structure without the stage" — i.e. the GA evaluates "with stage" against "without stage" fairly. (`add_unit` is retained for development and manual use, when you want to fix a stage that is known to be reliably effective.)
+**When you add a new stage (unit), use `add_gated_unit`, not `add_unit`.** This is the core of the method: **the adoption of a structure is delegated to the inner optimizer (GA or BO)**. `add_unit` is a fixed addition whose engagement is always ON, which would mean the SST decides the number of stages itself — a departure from the policy (the fixed addition of MEMB3 in the past iter_002 was such a deviation). `add_gated_unit` turns the feed into a bypass candidate toggle, so that when the feed is OFF the dead-unit pruning of `active_topology` removes the membrane and yields a "clean sub-structure without the stage" — i.e. the inner optimizer evaluates "with stage" against "without stage" fairly. (`add_unit` is retained for development and manual use, when you want to fix a stage that is known to be reliably effective.)
 
 ---
 
@@ -56,7 +56,7 @@ Read the following signals from `results.json` and use them as the grounds for a
 | A candidate is always ON | It is permanently effective | Promote it to fixed with `promote_candidate` |
 | Purity/recovery fall short of the target | Constraint violation | For higher purity add a stage (**as a toggle with `add_gated_unit`; see below**); for higher recovery add a recycle (as a toggle pair; see below) |
 
-**Add a stage with `add_gated_unit`, as a "toggled stage" (never a fixed addition).** It is done in a single op: the membrane feed becomes a bypass candidate toggle, and the pruning in `active_topology` removes the stage when the feed is OFF — so the GA chooses between "with stage" and "without stage". For example, to add a third stage on the flow where the MEMB2 permeate V5 goes to the product V7:
+**Add a stage with `add_gated_unit`, as a "toggled stage" (never a fixed addition).** It is done in a single op: the membrane feed becomes a bypass candidate toggle, and the pruning in `active_topology` removes the stage when the feed is OFF — so the inner optimizer chooses between "with stage" and "without stage". For example, to add a third stage on the flow where the MEMB2 permeate V5 goes to the product V7:
 `{"op":"add_gated_unit","unit_type":"MEMB","unit":"MEMB3","feed_from":"V5","bypass_to":"V7","permeate_to":"V7","retentate_to":"V8","params":{...}}`.
 **Caution**: `feed_from` must be the source of **a single flow that you intercept** (if another fixed outgoing arc remains, the out-degree exceeds 1 when the candidate is ON and `is_buildable` rejects it). **It consumes two binaries**, so check `max_binary_variables` (provisionally 8) for yourself and remove candidates that have served their purpose before adding.
 
@@ -102,7 +102,7 @@ Do not repeat proposals that only add. At the same time, **do not cut so much th
 
 Do not test buildability in advance. Judge from the execution results.
 
-- If the best solution of the GA lands **entirely in the penalty region** (not a single concrete topology satisfies the constraints; purity and recovery are extremely low), the previous proposal has probably broken the structure. **Revert to the previous SS, or make a different proposal**.
+- If the best solution of the inner optimizer lands **entirely in the penalty region** (not a single concrete topology satisfies the constraints; purity and recovery are extremely low), the previous proposal has probably broken the structure. **Revert to the previous SS, or make a different proposal**.
 - Do the same if a build failure or a convergence failure of Aspen has spread across the whole of `results.json`.
 - To revert, either write the inverse operations in `ss_change.json`, or restore `ss_before_change.json` (which apply_ss saves) to `ss_current.json` and propose again.
 - **When you apply_ss to the same iter a second time (e.g. proposing again after a revert), pass `--force`.** By default apply_ss refuses to re-apply to an iter that already has the saved file `ss_before_change.json` (to prevent the accident of a retry overwriting and losing the rollback point). Use `--force` only knowing that it overwrites the saved copy.
