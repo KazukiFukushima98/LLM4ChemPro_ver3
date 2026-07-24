@@ -15,7 +15,13 @@ Optimising the continuous variables is the job of the inner loop (the inner opti
 
 Express a proposal **exclusively** with the **structural operations** of `ARCHITECTURE.md` section 6.2 (`add_unit` / `add_gated_unit` / `delete_unit` / `add_arc` / `delete_arc` / `promote_candidate`), and write it to `ss_change.json`. **`set_bounds` is kept out of the autonomous agent's hands** — the bounds are a fixed setting given by a human, and the agent does not widen them. (`op_set_bounds` itself is retained in `apply_ss` for **manual/development** use, but the autonomous loop does not use it.)
 
-**When you add a new stage (unit), use `add_gated_unit`, not `add_unit`.** This is the core of the method: **the adoption of a structure is delegated to the inner optimizer (GA or BO)**. `add_unit` is a fixed addition whose engagement is always ON, which would mean the SST decides the number of stages itself — a departure from the policy (the fixed addition of MEMB3 in the past iter_002 was such a deviation). `add_gated_unit` turns the feed into a bypass candidate toggle, so that when the feed is OFF the dead-unit pruning of `active_topology` removes the membrane and yields a "clean sub-structure without the stage" — i.e. the inner optimizer evaluates "with stage" against "without stage" fairly. (`add_unit` is retained for development and manual use, when you want to fix a stage that is known to be reliably effective.)
+**When you add a new stage (unit), the default is `add_gated_unit`, not `add_unit`.** This is the core of the method: **the adoption of an uncertain structure is delegated to the inner optimizer (GA or BO)**. `add_unit` is a fixed addition whose engagement is always ON. `add_gated_unit` turns the feed into a bypass candidate toggle, so that when the feed is OFF the dead-unit pruning of `active_topology` removes the membrane and yields a "clean sub-structure without the stage" — i.e. the inner optimizer evaluates "with stage" against "without stage" fairly.
+
+**Fixed-addition exception (revised 2026-07-24):** `add_unit` **is allowed** when engineering knowledge and/or the measurements of this run make the benefit **near-certain** — state that basis in `reason`. A fixed addition consumes no binaries, so it saves the budget for the choices that are genuinely uncertain. If the slightest doubt remains, gate it. If a fixed addition turns out to hurt, remove it in a later iteration (`delete_unit`, or turn its feed into a candidate pair) — the rollback rules below apply.
+
+## Knowledge policy (revised 2026-07-24)
+
+You may — and should — ground your proposals in **standard chemical-engineering knowledge** (staged separation and cascade archetypes, driving-force and pressure-ratio reasoning, known selectivity/permeance trade-offs) *in addition to* the measured signals of this run. Knowledge and measurements are complementary: use knowledge to decide **what is worth trying**, and the inner optimizer's measurements to adjudicate **what is uncertain**. What remains strictly forbidden is unchanged: information from **other runs** (the run-blind principle in "Rules to observe") and probe evaluations.
 
 ---
 
@@ -44,8 +50,9 @@ The user only specifies the starting point of the run (e.g. "run runs/run24"). F
 
 ## Signals -> structural proposals
 
-Read the following signals from `results.json` and use them as the grounds for a structural change. **Quote the concrete numbers that supported the decision in `reason`**
-(e.g. `"MEMB2_p_perm=0.01 is pinned at its lower bound -> add a permeate-side COMP to widen the driving-force range"`).
+Read the following signals from `results.json` and use them as grounds for a structural change. **State the basis of every operation in `reason`**: quote the concrete measured numbers when the move is signal-driven
+(e.g. `"MEMB2_p_perm=0.01 is pinned at its lower bound -> add a permeate-side COMP to widen the driving-force range"`),
+and/or the engineering rationale when it is knowledge-driven (per the Knowledge policy above).
 
 | Signal | Interpretation | Structural proposal |
 |---|---|---|
@@ -56,7 +63,7 @@ Read the following signals from `results.json` and use them as the grounds for a
 | A candidate is always ON | It is permanently effective | Promote it to fixed with `promote_candidate` |
 | Purity/recovery fall short of the target | Constraint violation | For higher purity add a stage (**as a toggle with `add_gated_unit`; see below**); for higher recovery add a recycle (as a toggle pair; see below) |
 
-**Add a stage with `add_gated_unit`, as a "toggled stage" (never a fixed addition).** It is done in a single op: the membrane feed becomes a bypass candidate toggle, and the pruning in `active_topology` removes the stage when the feed is OFF — so the inner optimizer chooses between "with stage" and "without stage". For example, to add a third stage on the flow where the MEMB2 permeate V5 goes to the product V7:
+**Add a stage with `add_gated_unit`, as a "toggled stage" (the default; see the fixed-addition exception above).** It is done in a single op: the membrane feed becomes a bypass candidate toggle, and the pruning in `active_topology` removes the stage when the feed is OFF — so the inner optimizer chooses between "with stage" and "without stage". For example, to add a third stage on the flow where the MEMB2 permeate V5 goes to the product V7:
 `{"op":"add_gated_unit","unit_type":"MEMB","unit":"MEMB3","feed_from":"V5","bypass_to":"V7","permeate_to":"V7","retentate_to":"V8","params":{...}}`.
 **Caution**: `feed_from` must be the source of **a single flow that you intercept** (if another fixed outgoing arc remains, the out-degree exceeds 1 when the candidate is ON and `is_buildable` rejects it). **It consumes two binaries**, so check `max_binary_variables` (provisionally 8) for yourself and remove candidates that have served their purpose before adding.
 
@@ -94,6 +101,8 @@ Do deletions and additions as a set. Remove converged variables, units that are 
 The limit is defined by **the number of binary variables (candidate arcs) used for structural decisions only** (changed 2026-07-10. Only the binaries cause a combinatorial explosion of 2^n; the continuous variables merely grow and shrink along with the units, so the cap on the total was removed).
 At every proposal, check for yourself that "the binary candidates do not exceed `case.yaml.max_binary_variables` (provisionally 8)" and that "they are not growing monotonically across iterations".
 To add a new candidate, first remove one that has served its purpose (always OFF, or pinned = already explored).
+
+**A single transition may add multiple structural elements (revised 2026-07-24).** When one design rationale covers them (e.g. several gated stages of a stripping cascade), add them together in one `ss_change.json` — you are not required to move one element per iteration. Two guardrails: (a) stay within `max_binary_variables`, and remember that the inner BO's cost and its power to discriminate structures both scale with the number of binary combinations, so every key must be backed by a real hypothesis — **never pad with filler candidates, and never treat the cap of 8 as a quota**; (b) conversely, **do not leave the budget idle while genuine structural hypotheses remain untested** — if you hold only 2 keys but an obvious open question exists, gate it now rather than in a later iteration.
 Do not repeat proposals that only add. At the same time, **do not cut so much that the search degenerates** — do not go below `case.yaml.min_variables` (provisionally 4) in total. The transitions should continue, so keep "moving" things with deletions and additions.
 
 ---
