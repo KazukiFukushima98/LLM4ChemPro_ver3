@@ -5,7 +5,34 @@
 
 ---
 
-## 直近の状態（2026-07-28）— run32（v1 seed 2本目）完走・68.79 $/tCO2（run30 と同型 4 膜・正規収束停止）。次は run33（Opus 4.8）
+## 直近の状態（2026-07-28 夜）— run33（Opus 4.8）完走・66.44 $/tCO2（3標本の最良）。run32 はモデル汚染で分布除外、6.5h→T_max 方式へ。run34 開始
+
+**run33 の結末**：best **66.44 $/tCO2**（iter_008、4膜=回収側直列ストリップ変種、
+purity 95.4 / recovery 90.2）。11 反復・約 9.0h、コスト3連続無改善の正規収束停止。
+初 feasible は 7.7h。詳細と確定知見は experiment_log.md の run33 節。ルート `runs/` へアーカイブ済み。
+
+**ユーザ決定（2026-07-28、run33 完了後）**：
+1. **run32 は Opus 5 実行のためモデル汚染 → 論文1の SST 標本分布から除外**（頑健性の傍証として
+   補足利用は可）。有効標本 = run30・run33（いずれも Opus 4.8）。
+2. **6.5h wall-clock プロトコルを廃止し T_max 方式へ**。T_max = 有効 SST 標本の最長 wall-clock
+   （現状 run33 の ~9h）。baseline（GA-Deb ×3・2相 CBO ×3 を優先）を T_max まで回して全手法の
+   anytime 曲線で比較、SST の自己停止点は曲線上のマーカー。
+   → 「SST だけ停止基準が2つ（3反復無改善 or 6.5h）になっている」不公平の解消。
+3. **実行順序：SST 残り seed（run34, 35、Opus 4.8）を先に完了 → T_max 確定 → baseline 延長を
+   1回で実施**。既存 6.5h baseline は補助表に残す（BO 全滅・GA-penalty 全滅の傾向は 6.5h で十分）。
+
+**開発側の調査候補（seed 収集完了後）**：run33 で**内側（topology モード）と詳細評価の乖離が2回**
+（iter_002 退化解、iter_005 内側 feasible 66.0 → 詳細 recovery 63.4%）。リサイクル絡みの収束モード差の
+疑い。run30/32 には無かった規模。
+
+**次の作業**：
+1. **run34（SST seed、v1・Opus 4.8）** — 実行中
+2. run35 → T_max 確定 → baseline 延長（GA-Deb ×3・CBO ×3、~T_max×6 ≈ 2.5日）
+3. 論文図版・残りの baseline seed（sampling-uniform seed2/3 ほか）
+
+---
+
+## 前段の状態（2026-07-28）— run32（v1 seed 2本目）完走・68.79 $/tCO2（run30 と同型 4 膜・正規収束停止）。次は run33（Opus 4.8）
 
 **run32 の結末**：best **68.79 $/tCO2**（iter_006、4膜、purity 95.2 / recovery 90.8）。
 9 反復・内側 16.3h（07-27 15:43〜07-28 08:15）・1629 評価、sentinel ゼロ、
