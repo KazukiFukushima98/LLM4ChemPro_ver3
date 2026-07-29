@@ -39,6 +39,13 @@ run32（Opus 5、68.79）はモデル汚染により分布外・頑健性傍証�
 - run 内の同一構造再実行（run33/35 終盤）は反復番号=seed が進むため毎回別初期化 —
   restart 分散の実測として有効（無駄な再計算ではない）。
 
+**baseline 10h campaign 開始（2026-07-29 16:58）**：`algorithm/scratch/baseline_campaign_10h.py` で
+20 run（GA-Deb: lee3/lee4 × pop40/100 × seed1-4、CBO: lee3 × seed1-4）を seed-major 順に逐次実行中
+（detached、~200h 見込み）。`--seed` 修正（`3fe69e6`）後の正しい独立標本。
+旧 6.5h run は名前衝突回避のため `_65h` サフィックスへリネーム済み
+（対象: lee3/lee4 GA-Deb pop40(+seed2,3)・lee3 pop100・lee3 bo(+seed2,3) の各 dir と .log）。
+状態は `runs/campaign_10h_status.jsonl`、監視は開発セッションの watcher（30分 heartbeat）。
+
 **次の作業**：
 1. ~~run35 をルート `runs/` へアーカイブ~~（済 2026-07-29。runs/ = run24, 31〜35）
 2. **baseline 延長**：wall-clock 10h（GA=世代境界、BO=バッチ境界＋ハードタイムアウト）で
