@@ -422,11 +422,32 @@ def main() -> None:
         RI.run_ga = ga_onehot.run_ga_onehot
         print("[baseline] GA one-hot injection: run_iteration.run_ga -> ga_onehot.run_ga_onehot")
 
+    # --seed must reach the optimizer's own RNG. run_one_iteration passes
+    # seed=iter_num (=1 for a fresh baseline dir) to run_ga/run_bo, so before
+    # this override every "--seed N" run drew the SAME initial design and
+    # differed only through Aspen evaluation noise (found 2026-07-29: the 6.5h
+    # GA _seed2/_seed3 runs share the identical gen-1 best 295.354 for this
+    # reason — they are not independent draws). The wrapper forces the CLI
+    # seed into the optimizer regardless of the iteration number; results.json
+    # still records seed=iter_num, so the authoritative seed is the run name /
+    # baseline_summary.json.
+    if args.optimizer == "bo":
+        import bo as _bo
+        _orig_run_bo = _bo.run_bo
+        _bo.run_bo = (lambda ss_, case_, ev_, seed=1:
+                      _orig_run_bo(ss_, case_, ev_, seed=args.seed))
+    else:
+        _orig_run_ga = RI.run_ga
+        RI.run_ga = (lambda ss_, case_, ev_, seed=1:
+                     _orig_run_ga(ss_, case_, ev_, seed=args.seed))
+    print(f"[baseline] optimizer seed override: {args.seed} (iter_num is ignored)")
+
     results = RI.run_one_iteration(base_dir, case, commit=False)
 
     perf = results.get("performance", {})
     summary = {
         "run": run_name, "ss": args.ss, "optimizer": args.optimizer,
+        "seed": args.seed,
         "pilot": args.pilot, "budget": budget,
         "n_evaluations": results.get("n_evaluations"),
         "performance": perf,
