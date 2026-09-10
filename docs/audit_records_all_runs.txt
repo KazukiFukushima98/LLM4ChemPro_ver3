@@ -1,0 +1,48 @@
+判断記録（ss_change.json の reason / HANDOFF.md）の監査 — 論文の一次記録に他 run・外部知識への言及がないか（tools/audit_blind.py --run-dir、2026-09-10）
+
+###### Run 1 ######
+==============================================================================
+判断記録の監査  LLM4ChemPro_ver3/algorithm/runs/run30  (8 ファイル: ss_change.json × iter + HANDOFF.md)
+判定: CRITICAL   （外部知識・他 run への言及 1 件）
+==============================================================================
+[HANDOFF.md] token=run24
+    ...r per type), objective = minimize capture cost. **Feed**: co2_frac=0.13 (first run at the new 0.13; run24–26 used 0.15), 80,307 kmol/h. **Targets**: purity ≥ 0.95, recovery ≥ 0.90.  ## Outcome: FEASIBLE. C...
+
+###### Run 4 ######
+==============================================================================
+判断記録の監査  LLM4ChemPro_ver3/runs/run35  (5 ファイル: ss_change.json × iter + HANDOFF.md)
+判定: PASS   （外部知識・他 run への言及 0 件）
+==============================================================================
+
+###### rb01 ######
+==============================================================================
+判断記録の監査  LLM4ChemPro_ver3/runs/rb01  (6 ファイル: ss_change.json × iter + HANDOFF.md)
+判定: PASS   （外部知識・他 run への言及 0 件）
+==============================================================================
+
+###### rb02 ######
+==============================================================================
+判断記録の監査  LLM4ChemPro_ver3/runs/rb02  (6 ファイル: ss_change.json × iter + HANDOFF.md)
+判定: PASS   （外部知識・他 run への言及 0 件）
+==============================================================================
+
+###### 破棄 run33（較正用） ######
+==============================================================================
+判断記録の監査  archive/2026-09-09_discarded_runs/root_runs/run33  (9 ファイル: ss_change.json × iter + HANDOFF.md)
+判定: CRITICAL   （外部知識・他 run への言及 3 件）
+==============================================================================
+[iterations\iter_007\ss_change.json] token=known to exist
+    ...e playbook (pinned bound -> work around it structurally), and since a 4-membrane feasible design is known to exist in this campaign while I am at 3 membranes, test a two-stage recovery cascade: add a gated MEMB5 re...
+[iterations\iter_007\ss_change.json] token=in this campaign
+    ...ned bound -> work around it structurally), and since a 4-membrane feasible design is known to exist in this campaign while I am at 3 membranes, test a two-stage recovery cascade: add a gated MEMB5 recovery stage in s...
+[HANDOFF.md] token=run30
+    ...energy | 532.3 kWh/tCO2 | | total compressor | 220436 kW |  **66.44 $/t is slightly better than the run30 reference (67.15 $/t)**, independently rediscovered here.  ### Final structure — 4-membrane cascade...
+
+###### 破棄 run34（較正用） ######
+==============================================================================
+判断記録の監査  archive/2026-09-09_discarded_runs/root_runs/run34  (7 ファイル: ss_change.json × iter + HANDOFF.md)
+判定: CRITICAL   （外部知識・他 run への言及 1 件）
+==============================================================================
+[HANDOFF.md] token=other run
+    ...s exhausted.  ## For the human (decisions I cannot make — I must not touch case.yaml / probe / read other runs)  1. **Is recovery ≥ 0.90 attainable under blower-only at feed CO2 = 0.13?** This run's evidence s...
+
