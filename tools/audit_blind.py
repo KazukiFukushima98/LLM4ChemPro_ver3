@@ -16,7 +16,8 @@ from __future__ import annotations
 import argparse, glob, io, json, os, re, sys
 
 # --- 検出パターン -----------------------------------------------------------
-RE_RUN = re.compile(r"\brun\s?(\d{1,3})\b", re.I)
+# "run30" / "run 30" を拾う。"Re-run 4-stage" のような英語の動詞用法（前に "re-"、後ろに "-"）は除く。
+RE_RUN = re.compile(r"(?<![Rr]e-)\brun\s?(\d{1,3})\b(?!-)", re.I)
 RE_BASELINE = re.compile(r"\bbaseline_[A-Za-z0-9_]+", re.I)
 RE_COST = re.compile(r"(\d{2,4}\.\d{1,2})\s*\$\s*/\s*t", re.I)
 # 「記憶から出てきた」ことを自白する言い回し
