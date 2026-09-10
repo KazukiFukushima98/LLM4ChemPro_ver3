@@ -161,6 +161,15 @@ foreach ($d in @("src", "tests", ".claude")) {
 }
 Remove-Item (Join-Path $Dest "algorithm/tests/test_baseline.py") -ErrorAction SilentlyContinue
 Get-ChildItem $Dest -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
+# YAspen/ は git が追跡する本体 2 ファイル（YAspen.apw / YAspen.bkp）だけを残す。実行機の作業ツリーには
+# 過去の run が残した Aspen の例外ダンプ（日付入りファイル名）や $backup.bkp が溜まっており、
+# ファイル名自体が履歴になるので持ち込まない。
+$yaspen = Join-Path $Dest "algorithm/src/YAspen"
+Get-ChildItem $yaspen -Force | Where-Object { $_.Name -notin @("YAspen.apw", "YAspen.bkp") } |
+  Remove-Item -Recurse -Force
+foreach ($must in @("YAspen.apw", "YAspen.bkp")) {
+  if (-not (Test-Path (Join-Path $yaspen $must))) { throw "YAspen/$must が無い" }
+}
 New-Item -ItemType Directory (Join-Path $Dest "algorithm/runs") | Out-Null
 New-Item -ItemType Directory (Join-Path $Dest "algorithm/scratch") | Out-Null
 
