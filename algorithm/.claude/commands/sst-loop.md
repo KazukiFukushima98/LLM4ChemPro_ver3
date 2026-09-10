@@ -19,7 +19,7 @@ Act as the SST agent (`CLAUDE.md`, the instructions for this algorithm directory
 - Confirm the auto-commit from the output of run_iteration; do not separately invoke `git status`/`git log`.
 - Issue commands with the **Bash tool** (with the PowerShell tool the permission rules do not apply and everything turns into a confirmation dialog).
 - `case.yaml` / `ss_seed.json` cannot be written because of the deny settings (this is by design; ask a human for changes).
-- **Do not read any run directory other than RUN** (the run-blind principle; see "Rules to observe" in `CLAUDE.md`). If you need the format of ss_change, look at the examples in `CLAUDE.md` / `ARCHITECTURE.md` section 6.2.
+- **Do not read any run directory other than RUN** (the run-blind principle; see "Rules to observe" in `CLAUDE.md`). If you need the format of ss_change, look at the examples in `CLAUDE.md` (and the docstrings of `src/apply_ss.py`).
 
 Repeat "The procedure for one iteration" from `CLAUDE.md` as follows:
 

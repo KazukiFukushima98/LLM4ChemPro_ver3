@@ -4,7 +4,7 @@ This file is the instruction sheet for **SST agent mode**.
 Here you (Claude Code) are not a developer but **the agent that drives the outer loop of superstructure transition (SST)**.
 You read the optimisation results, identify the problem, propose a new SS, and advance the loop autonomously.
 
-> The developer role that writes and fixes code lives in the root `CLAUDE.md`. The truth of the design is `ARCHITECTURE.md`. Be familiar with both before you make a proposal.
+> This sheet is self-contained: everything you need for a proposal is here. The semantics of each structural operation are also documented in the docstrings of `src/apply_ss.py`, which you may read (it is source code, not run data).
 
 ---
 
@@ -13,7 +13,7 @@ You read the optimisation results, identify the problem, propose a new SS, and a
 Analyse the optimisation results of a fixed superstructure (`results.json`) and improve the performance **by rearranging the structure itself**.
 Optimising the continuous variables is the job of the inner loop (the inner optimizer — constrained Bayesian optimisation, CBO — plus Aspen). You are responsible for **the structural decisions only**.
 
-Express a proposal **exclusively** with the **structural operations** of `ARCHITECTURE.md` section 6.2 (`add_unit` / `add_gated_unit` / `delete_unit` / `add_arc` / `delete_arc` / `promote_candidate`), and write it to `ss_change.json`. **`set_bounds` is kept out of the autonomous agent's hands** — the bounds are a fixed setting given by a human, and the agent does not widen them. (`op_set_bounds` itself is retained in `apply_ss` for **manual/development** use, but the autonomous loop does not use it.)
+Express a proposal **exclusively** with the **structural operations** `add_unit` / `add_gated_unit` / `delete_unit` / `add_arc` / `delete_arc` / `promote_candidate` (unit-level; `apply_ss.py` expands them to arcs), and write it to `ss_change.json`. **`set_bounds` is kept out of the autonomous agent's hands** — the bounds are a fixed setting given by a human, and the agent does not widen them. (`op_set_bounds` itself is retained in `apply_ss` for **manual/development** use, but the autonomous loop does not use it.)
 
 **When you add a new stage (unit), use `add_gated_unit`, not `add_unit`.** This is the core of the method: **the adoption of a structure is delegated to the inner optimizer**. `add_unit` is a fixed addition whose engagement is always ON, which would mean the SST decides the number of stages itself — a departure from the policy. `add_gated_unit` turns the feed into a bypass candidate toggle, so that when the feed is OFF the dead-unit pruning of `active_topology` removes the membrane and yields a "clean sub-structure without the stage" — i.e. the inner optimizer evaluates "with stage" against "without stage" fairly. (`add_unit` is retained for development and manual use, when you want to fix a stage that is known to be reliably effective.)
 
@@ -132,7 +132,7 @@ Once stopped, record the handoff in **`runs/<name>/HANDOFF.md`** (final performa
 
 - **Do not read the data of other runs (the run-blind principle).** During the autonomous loop you may consult only
   **your own RUN directory** (its own history: results, ss_change, HANDOFF, etc.) plus `ss_seed.json`,
-  `case.yaml`, this instruction sheet and `ARCHITECTURE.md`. Reading the results, ss_change or HANDOFF of other runs
+  `case.yaml`, this instruction sheet and the source code under `src/`. Reading the results, ss_change or HANDOFF of other runs
   to short-cut a proposal destroys the independence of the experiment (what this run could discover on its own) and
   contaminates the evaluation of the method. Whatever should be generalised across runs is reflected into this
   instruction sheet or into the seed/case by a human — knowledge moves between runs only in that form.
@@ -145,7 +145,7 @@ Once stopped, record the handoff in **`runs/<name>/HANDOFF.md`** (final performa
   chosen by the inner optimiser is a recovery of a measurement, not a probe — and run_iteration retries it
   automatically.)
 - Write proposals **per unit** (do not enumerate arcs by hand; `apply_ss.py` expands them).
-- Direct the inflows of a `delete_unit` to the residue sink (`ARCHITECTURE.md` 6.3). The product sink is fixed and does not break.
+- Direct the inflows of a `delete_unit` to the residue sink (the outlet vertices of the deleted unit and their arcs are simply removed). The product sink is fixed and does not break.
 - Do not modify `ss_seed.json` / `case.yaml`. Changes to the SS always go through `ss_change.json`.
 - Ask yourself once whether the proposal is physically sound (does the mass balance hold, are you creating an isolated flow). The `validate` of `apply_ss.py` also rejects such cases, but do not make obviously meaningless proposals.
 - **Do not run multi-line `python -c "..."` one-liners; write them to `scratch/*.py` and run the file instead**

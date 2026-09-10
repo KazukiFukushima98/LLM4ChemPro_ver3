@@ -96,11 +96,12 @@ run34 の thinking はこれを自分で名指ししている
 ### C. セッション
 
 - **1 run = 1 新規セッション。** `--continue` / `--resume` を使わない。2 本を同一セッションで連続実行しない。
-- 起動は `claude --model claude-opus-4-8 --add-dir <workspace>`、起動後に auto mode（Shift+Tab）。
-  `--add-dir` でワークスペース直下（`ARCHITECTURE.md`・ルート `CLAUDE.md`）を作業フォルダに加える。指示書が読んでよいと
-  している文書は読める状態にし、その外（本体リポジトリ・他 run）は `blockReadsOutsideWorkingDirectories` でブロックする。
-  auto mode でないと複合シェルコマンドの権限確認で止まる（rb01 の 1 回目）。`--add-dir` が無いと `../ARCHITECTURE.md` の
-  読み取りで止まる（rb03 の 1 回目）。rb01 は ARCHITECTURE.md を読まず、rb02 は Read ブロックで読めなかった（記録あり）。
+- 起動は `claude --model claude-opus-4-8`、起動後に auto mode（Shift+Tab）。auto mode でないと複合シェルコマンドの
+  権限確認で止まる（rb01 の 1 回目）。
+- **エージェントが読む corpus = `algorithm/` の中だけ**（指示書 `algorithm/CLAUDE.md`・`ss_seed.json`・`case.yaml`・`src/`・
+  `.claude/`）。`ARCHITECTURE.md` とルート `CLAUDE.md` はワークスペースに置かない（rb01 は読まず、rb02 は読めず、rb03 は読んだが、
+  3 本とも同じ構造に到達した。指示書は自己完結）。`algorithm/` の外は `blockReadsOutsideWorkingDirectories` でブロック。
+  corpus からは過去 run・日付・commit・「GA」呼称を除去済み（commit d048e4b 以降）。
 - モデルは **Opus 4.8** を明示指定し、起動直後に `/model` で表示された ID を `runs/<run>/MODEL.txt` に記録する
   （run30 と同条件であることの一次データ）。
 - 実行中は人間が話しかけない（会話経由の汚染を作らない）。

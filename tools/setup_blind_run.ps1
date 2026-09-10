@@ -144,7 +144,9 @@ if (Test-Path $Dest) { throw "$Dest が既にある。消すか別名を指定�
 New-Item -ItemType Directory $Dest | Out-Null
 New-Item -ItemType Directory (Join-Path $Dest "algorithm") | Out-Null
 
-foreach ($f in @("ARCHITECTURE.md", "CLAUDE.md", "pyproject.toml", "uv.lock")) {
+# ルート直下は uv の実行に要るものだけ。ARCHITECTURE.md とルート CLAUDE.md（開発者向け）は
+# エージェントに読ませない（指示書 algorithm/CLAUDE.md が自己完結）。
+foreach ($f in @("pyproject.toml", "uv.lock")) {
   Copy-Item (Join-Path $Repo $f) (Join-Path $Dest $f)
 }
 foreach ($f in @("CLAUDE.md", "case.yaml", "ss_seed.json")) {
@@ -225,12 +227,10 @@ Write-Host "  docs / 他 run / 元の git 履歴なし (OK)" -ForegroundColor Gr
      新規の Claude Code セッションを開く。--continue / --resume は使わない。
 
        cd "$Dest\algorithm"
-       claude --model claude-opus-4-8 --add-dir "$Dest"
+       claude --model claude-opus-4-8
 
-     --add-dir はワークスペース直下（ARCHITECTURE.md・ルート CLAUDE.md がある）を作業フォルダに加える。
-     指示書が読んでよいとしている文書なので読めるようにし、その外（本体リポジトリ）は
-     blockReadsOutsideWorkingDirectories でブロックのまま。付けないと ../ARCHITECTURE.md の読み取りで
-     権限確認が出て止まる（rb03 の 1 回目）。
+     エージェントが読むものはすべて algorithm\ の中にある（指示書・seed・case・src）。その外は
+     blockReadsOutsideWorkingDirectories でブロックされる。
 
   2. 起動バナーで「Opus 4.8 with xhigh effort」を確認し、Shift+Tab で **auto mode** に切り替える
      （manual のままだと複合コマンドの権限確認で止まる: rb01 の 1 回目）。
