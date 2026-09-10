@@ -5,19 +5,15 @@
 feed:
   flowbase: MASS          # feed basis. Applied post-build (overrides builder defaults).
                           # *** NOTE: this write has no effect on the real system; TOTFLOW acts
-                          # as a **molar flow rate [kmol/h]** (measured with smoke_feed on
-                          # 2026-07-10: totflow=2.44e6 gives a total molar flow of 2.44e6 kmol/h
-                          # at V0. This also matches the run12 record of ver2, i.e. the behaviour
-                          # has been the same since ver2). The write sequence is a proven asset,
-                          # so it is left untouched and the value is supplied as a molar flow.
+                          # as a **molar flow rate [kmol/h]** (measured: totflow=2.44e6 gives a
+                          # total molar flow of 2.44e6 kmol/h at V0). The write sequence is a proven
+                          # asset, so it is left untouched and the value is supplied as a molar flow.
   totflow: 80307.0        # kmol/h. Equivalent to the 500 Nm3/s = 22,307.5 mol/s flue gas of the
                           # 600 MWe coal-fired power plant in Lee et al. (2018). This scale is
-                          # consistent with the membrane area bounds (kept at Lee's values)
-                          # (user decision 2026-07-10).
+                          # consistent with the membrane area bounds (kept at Lee's values).
   co2_frac: 0.13          # post-combustion (coal-fired flue gas). Consistent with the feed
-                          # composition of Lee et al. (2018) (13 mol% from their ref. [3])
-                          # (user decision 2026-07-16; the former value 0.15 was used in
-                          # run24-26). For DAC this would be ~0.00042 (420 ppm).
+                          # composition of Lee et al. (2018) (13 mol% from their ref. [3]).
+                          # For DAC this would be ~0.00042 (420 ppm).
   temp: 25.0              # °C. Feed temperature.
   pressure: 1.0           # bar. Feed pressure.
   basis: MOLE-FRAC        # composition basis. The combination FLOWBASE=MASS with BASIS=MOLE-FRAC
@@ -26,19 +22,17 @@ feed:
 
 optimization_targets:
   purity_min: 0.95        # CO2 product purity lower bound (equivalent to the CO2 transport spec).
-                          # Raised from 0.90 to 0.95 on 2026-07-07: it exceeds the theoretical
-                          # limit of a single stage (y~=89.8% at alpha=50 and 15% feed), so a
-                          # two-stage enrichment becomes mandatory and pressure toward more
-                          # stages is applied.
+                          # 0.95 exceeds the theoretical limit of a single stage (y~=89.8% at
+                          # alpha=50 and 15% feed), so a two-stage enrichment becomes mandatory
+                          # and pressure toward more stages is applied.
   recovery_min: 0.90      # CO2 recovery lower bound (equivalent to the DOE recovery target).
-                          # Raised from 0.70 to 0.90: recovering the CO2 in the retentate becomes
-                          # mandatory, which triggers a structural competition between a large
+                          # At 0.90, recovering the CO2 in the retentate becomes mandatory,
+                          # which triggers a structural competition between a large
                           # recycle and a retentate-side recovery stage, i.e. a system in which
                           # three stages can emerge.
-  objective: minimize_cost  # ver3 12.2: minimise the annualised capture cost [$/tCO2] (see
-                            # economics:). Switching back to `minimize_specific_energy` restores
-                            # the ver2 energy objective. Either way, results.json records both
-                            # energy and cost.
+  objective: minimize_cost  # minimise the annualised capture cost [$/tCO2] (see economics:).
+                            # `minimize_specific_energy` selects the energy objective instead.
+                            # Either way, results.json records both energy and cost.
 
 penalty_weight: 100000.0  # PENALTY_W. Quadratic penalty on purity/recovery shortfall.
                           # Written as an integer-style literal because 1.0e5 would be parsed as
@@ -48,23 +42,21 @@ penalty_weight: 100000.0  # PENALTY_W. Quadratic penalty on purity/recovery shor
                           # Note: with objective=minimize_cost, economics.penalty_weight (the
                           # cost-scale lambda, Lee's r=1000) is used instead.
 
-# ver3 12.2: economic constants (Lee et al. 2018, Table 1; human-managed).
+# Economic constants (Lee et al. 2018, Table 1; human-managed).
 # F_obj = (capital_charge * installation_factor * C_TCC) / (M_CO2 * t_op) + E*Ce + penalty
-# The heat-exchanger cost (Chx) was incorporated on 2026-07-16 (Lee S2.3: U=132.5 W/m2K,
-# cooling water 20->25 degC, counter-current LMTD, gas outlet 35 degC. The area is computed by
-# the simulator from the duty of the automatic coolers HXV/HXC).
-# Note that run24-26 were optimised with the old objective function, which had no HX.
+# The heat-exchanger cost (Chx) follows Lee S2.3 (U=132.5 W/m2K, cooling water 20->25 degC,
+# counter-current LMTD, gas outlet 35 degC. The area is computed by the simulator from the duty
+# of the automatic coolers HXV/HXC).
 # The CAPEX of the pressure equipment is C_unit * |WNET| (the electrical power as-is, NOT divided
 # by eta). Reproducing the four designs of Lee Fig.3/4 agrees with the paper's C_cap to within
-# about -2% (~= the omitted HX contribution), confirmed 2026-07-10. The "/eta" in their Eq.16
-# converts isentropic work into actual power, and the Aspen WNET is already the actual power.
+# about -2%. The "/eta" in their Eq.16 converts isentropic work into actual power, and the
+# Aspen WNET is already the actual power.
 economics:
   membrane_cost: 50.0             # $/m2 (including module and skid)
   compressor_cost: 670.0          # $/kW
   vacuum_pump_cost: 1341.0        # $/kW (applied to auto-VP)
-  expander_cost: 500.0            # $/kW (takes effect once the expander of 12.4 is implemented;
-                                  # identified by WNET<0)
-  hx_cost: 300.0                  # $/m2 (cooler. Lee Eq.16 C_hx. Incorporated 2026-07-16)
+  expander_cost: 500.0            # $/kW (expander EXP; identified by WNET<0)
+  hx_cost: 300.0                  # $/m2 (cooler. Lee Eq.16 C_hx)
   installation_factor: 1.6        # f_in
   capital_charge_rate: 0.2        # /y (annual capital charge rate of 20%)
   electricity_cost: 0.04          # $/kWh
@@ -74,34 +66,29 @@ economics:
 
 vp_outlet_pressure: 1.0   # bar. Auto-VP discharge pressure on each membrane permeate (fixed).
 
-# ver3 12.1: Robeson membrane model. The membrane property (permeance_CO2) is promoted from a
-# fixed per-stage value to a continuous GA/BO variable, and the selectivity is derived from the
-# Robeson 2008 CO2/N2 upper bound (referred to a 0.1 um thickness, Lee et al. 2018 Eq.21:
-# Q[GPU] = k * alpha^(-n)).
-# Deleting this section restores the previous behaviour (permeance is a fixed value in
-# units.params).
+# Robeson membrane model. The membrane property (permeance_CO2) is a continuous optimisation
+# variable, and the selectivity is derived from the Robeson 2008 CO2/N2 upper bound (referred to
+# a 0.1 um thickness, Lee et al. 2018 Eq.21: Q[GPU] = k * alpha^(-n)).
+# Without this section the permeance is a fixed value in units.params.
 membrane_model:
   tie: false                       # independent membrane per stage (each MEMB carries its own
-                                   # permeance variable {unit}_perm). User decision 2026-07-10:
-                                   # since the variable cap now counts binaries only, growth in
-                                   # the number of continuous variables is acceptable. Set to true
-                                   # to go back to the same membrane for every stage (one shared
-                                   # variable). The tie vs. per-stage comparison is itself the
-                                   # ablation of 12.1.
+                                   # permeance variable {unit}_perm). Since the variable cap counts
+                                   # binaries only, growth in the number of continuous variables is
+                                   # acceptable. Set to true for the same membrane in every stage
+                                   # (one shared variable).
   robeson_n: 2.888                 # slope of the upper bound (Robeson 2008 CO2/N2)
   robeson_k_gpu: 3.0967e+8         # prefactor of the upper bound [GPU] (referred to 0.1 um)
   gpu_to_aspen: 2.70677e-3         # 1 GPU -> Aspen units [m3(STP)/(m2*h*bar)].
-                                   # The current membrane permeance_CO2=2.70677 is identical to
-                                   # 1000 GPU (first-generation Polaris)
+                                   # A permeance_CO2 of 2.70677 is identical to 1000 GPU
+                                   # (first-generation Polaris)
   permeance_bounds_gpu: [500.0, 6000.0]   # search range [GPU]. Covers Lee's sensitivity range
                                           # 500-5000 plus the per-stage optimum of 5986 GPU
                                           # (alpha then ranges over 43-101)
 
 # Aspen timeouts. Integers [seconds].
-# evaluate_topology runs many times inside the GA loop, so it is kept short; evaluate_detailed
-# runs for a single best point only, so it is more generous.
-# If transitions that add stages start to stall, extend them individually (this addresses
-# COORDINATION phase 4(2)).
+# evaluate_topology runs many times inside the inner optimisation loop, so it is kept short;
+# evaluate_detailed runs for a single best point only, so it is more generous.
+# If transitions that add stages start to stall, extend them individually.
 aspen_timeout_eval:   60
 aspen_timeout_detail: 120
 
@@ -109,14 +96,13 @@ ga:
   pop_size: 20
   n_gen: 50
 
-optimizer: bo        # drive the SST loop with BO. To go back to the GA, delete this line or set
-                     # it to `ga`.
+optimizer: bo        # inner optimizer: bo (constrained BO) or ga (mixed GA).
 
 bo:
-  n_init:  24        # the 1.5x setting (where we landed after migrating from the GA)
+  n_init:  24
   n_iter:  60
-  q_batch:  4       # drive the SST loop with BO
-  patience: 10       # phase-aware patience for 12.5(c). Stop when there is no improvement for 10
+  q_batch:  4
+  patience: 10       # phase-aware patience. Stop when there is no improvement for 10
                      # consecutive iterations on the criterion of the current phase
                      # (bootstrap=min_shortfall / CEI=feasible cost); it resets on a phase switch
                      # and has a floor of n_iter/3. Set to 0 to disable.
@@ -124,15 +110,14 @@ bo:
 # Upper limit on the problem size of the SST (outer loop). A transition moves the variable space
 # rather than expanding it.
 # The limit is defined by **the number of binary variables (candidate arcs) used for structural
-# decisions only** (user decision 2026-07-10; the old max_variables=20, a cap on the total, was
-# removed). Rationale: only the binaries cause a combinatorial explosion (2^n topologies), while
+# decisions only** (there is no cap on the total number of variables).
+# Rationale: only the binaries cause a combinatorial explosion (2^n topologies), while
 # the continuous variables merely grow in proportion to the number of units (they only make the
 # inner optimisation of a single topology heavier). If the growth in continuous variables slows
 # down the convergence of the BO, adjust bo.n_init instead.
 max_binary_variables: 8    # upper limit on the binaries (candidate arcs). Up to 2^8=256 topologies
-                           #   (raised from 6 to 8 on 2026-07-07: the tougher targets need room for
-                           #   two gated stages (4 arcs) plus two recycle toggle pairs (4 arcs) to
-                           #   sit on the superstructure at the same time)
+                           #   (room for two gated stages (4 arcs) plus two recycle toggle pairs
+                           #   (4 arcs) to sit on the superstructure at the same time)
 min_variables: 4           # lower limit on the total. A guideline to prevent the space from
                            #   degenerating and the transitions from dying (not a hard constraint
                            #   that rejects anything).

@@ -84,7 +84,7 @@ class _AllBadMock:
 
 
 class _ShortfallLandscapeMock:
-    """A landscape where every point is infeasible and shortfall is inversely correlated with energy (for verifying 12.5(a)).
+    """A landscape where every point is infeasible and shortfall is inversely correlated with energy (for verifying the min-shortfall best return).
 
     For the continuous variable a = MEMB1_area (identified by name; what matters is that it is a
     large-scale variable, so that at penalty_weight=1 the energy term (0.01*a ~= 1e3-1e4)
@@ -203,7 +203,7 @@ class TestRunBO(unittest.TestCase):
             best, gen_log, n_evals = run_bo(ss, case, _SmoothMock(), seed=12)
         self.assertTrue(all(g["phase"] == "cei" for g in gen_log))
 
-    def test_bootstrap_off_restores_legacy_behavior(self) -> None:
+    def test_bootstrap_off_restores_penalty_min_behavior(self) -> None:
         """With bootstrap: off, CEI is used even when everything is infeasible (checks the rollback switch)."""
         from bo import run_bo
 
@@ -251,9 +251,9 @@ class TestRunBO(unittest.TestCase):
         self.assertLess(gen_log[-1]["best_fitness"], BAD_VALUE)
 
     def test_bootstrap_best_returns_min_shortfall(self) -> None:
-        """12.5(a): when the run ends with everything infeasible, best is the min-shortfall observation, not penalty-min.
+        """When the run ends with everything infeasible, best is the min-shortfall observation, not penalty-min.
 
-        At penalty_weight=1 the legacy penalty-min picks the energy-dominated point (= a minimal),
+        At penalty_weight=1 the penalty-min picks the energy-dominated point (= a minimal),
         but the search axis of the bootstrap phase is shortfall, so it should return a maximal
         (the best purity).
         """
@@ -268,8 +268,8 @@ class TestRunBO(unittest.TestCase):
         # the largest observed a (= the smallest shortfall) is returned
         self.assertAlmostEqual(best[mock.IDX], max(mock.seen), places=6)
 
-    def test_bootstrap_off_best_keeps_legacy_penalty_min(self) -> None:
-        """12.5(a) rollback switch: with bootstrap: off, best is still returned by the legacy penalty-min."""
+    def test_bootstrap_off_best_keeps_penalty_min(self) -> None:
+        """Switch: with bootstrap: off, best is still returned by the penalty-min."""
         from bo import run_bo
         ss = _load_seed()
         case = _make_case({"bootstrap": "off"})
@@ -340,7 +340,7 @@ class TestRunBO(unittest.TestCase):
 
 
 class TestMembraneModelIntegration(unittest.TestCase):
-    """12.1: with membrane_model enabled, the permeance variables enter the BO search dimensions and the run completes."""
+    """10.1: with membrane_model enabled, the permeance variables enter the BO search dimensions and the run completes."""
 
     def test_tie_mode_adds_one_shared_dimension(self) -> None:
         from bo import run_bo
@@ -367,7 +367,7 @@ class TestMembraneModelIntegration(unittest.TestCase):
 
 
 class TestPhasePatience(unittest.TestCase):
-    """12.5(c) The _PhasePatience state machine (pure logic)."""
+    """The _PhasePatience state machine (pure logic)."""
 
     def test_patience_zero_is_disabled(self) -> None:
         import bo as bo_mod
@@ -404,7 +404,7 @@ class TestPhasePatience(unittest.TestCase):
 
 
 class TestPatienceIntegration(unittest.TestCase):
-    """12.5(c) Early stopping in run_bo (floor n_iter/3; recorded in gen_log)."""
+    """Early stopping in run_bo (floor n_iter/3; recorded in gen_log)."""
 
     class _ConstantFeasibleMock:
         """The same feasible observation at every point (a landscape where improvement can never happen)."""
@@ -447,7 +447,7 @@ class TestPatienceIntegration(unittest.TestCase):
 
 
 class TestCostObjective(unittest.TestCase):
-    """12.2: with objective=minimize_cost, the BO objective and best selection move to the cost axis."""
+    """10.2: with objective=minimize_cost, the BO objective and best selection move to the cost axis."""
 
     @staticmethod
     def _cost_case() -> dict:
@@ -537,12 +537,12 @@ class TestXAlignmentWithPruning(unittest.TestCase):
 
 
 class TestLogScaleInputs(unittest.TestCase):
-    """12.5(b) Log scaling (search positive continuous variables whose bounds ratio exceeds 50 in log space)."""
+    """Log scaling (search positive continuous variables whose bounds ratio exceeds 50 in log space)."""
 
     def test_mask_on_seed_with_lee_bounds_is_all_false(self) -> None:
-        """With ver3's Lee-consistent bounds (area ratio 15, p_permeate ratio 9.9) nothing in the seed is log-scaled.
+        """With the Lee-consistent bounds (area ratio 15, p_permeate ratio 9.9) nothing in the seed is log-scaled.
 
-        The 12.5(b) implementation remains as insurance for cases with a bounds ratio above 50
+        The implementation remains as insurance for cases with a bounds ratio above 50
         (bounds_override, or wider ranges in the future). The positive case is covered by the
         synthetic test below.
         """
@@ -607,7 +607,7 @@ class TestLogScaleInputs(unittest.TestCase):
             self.assertGreaterEqual(v, lo - 1e-9)
             self.assertLessEqual(v, hi + 1e-9)
 
-    def test_log_scale_off_restores_legacy_and_completes(self) -> None:
+    def test_log_scale_off_restores_linear_and_completes(self) -> None:
         """With log_scale_inputs: off (including YAML's bool False) the run stays on linear scale and completes."""
         from bo import run_bo
         ss = _load_seed()

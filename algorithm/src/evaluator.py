@@ -1,11 +1,11 @@
-"""Abstract evaluation boundary (Evaluator Protocol), result types, and the cost objective (12.2).
+"""Abstract evaluation boundary (Evaluator Protocol), result types, and the cost objective (10.2).
 
 Defines the Evaluator Protocol of ARCHITECTURE 5.2 together with the Metrics /
 DetailedResult dataclasses. The implementation lives in simulator.AspenEvaluator.
 Swapping in a surrogate later (FMQA/BOQA etc.) only requires injecting a different
 implementation. Tests inject mocks.
 
-Cost objective (ver3 12.2):
+Cost objective (10.2):
     The pure function cost_per_tco2, which combines Metrics + membrane areas +
     case (economics/feed) into an annualized capture cost [$/tCO2], lives here --
     right next to Metrics, as part of the evaluation boundary -- so that the
@@ -22,13 +22,12 @@ BAD_VALUE: float = 1.0e6
 
 # Defaults for the economics: section (Lee et al., J. Membr. Sci. 563 (2018) Table 1).
 # Overridable via economics: in case.yaml (human-managed).
-# Note 1: The heat-exchanger cost (Chx=300 $/m2) was **omitted** because the flowsheet
-#     had no coolers (user decision, 2026-07-10). No negative WNET appears until the
-#     expander is implemented in 12.4.
+# Note 1: The heat-exchanger cost (Chx=300 $/m2) applies to the automatic coolers.
+#     Negative WNET appears only with an expander (10.4).
 # Note 2: CAPEX of pressure equipment is **C_unit x |WNET| (electric power as-is, not
 #     divided by eta)**. Dividing electric power by eta as Lee Eq.16 literally reads
 #     (C.W/eta) overshoots the paper's own values (C_cap in Fig.3/4) systematically by
-#     +8 to 10%, as confirmed by reproducing all four designs (2026-07-10). The W/eta in
+#     +8 to 10%, as confirmed by reproducing all four designs. The W/eta in
 #     Eq.16 converts isentropic work to actual power, and Aspen's WNET is already actual
 #     power, so no further division is needed. Without eta and with HX omitted, the gap
 #     to the published values stays around -2% for all four designs (~= the omitted HX).
@@ -36,8 +35,8 @@ ECONOMICS_DEFAULTS: dict[str, float] = {
     "membrane_cost": 50.0,          # $/m2 (module and skid included)
     "compressor_cost": 670.0,       # $/kW
     "vacuum_pump_cost": 1341.0,     # $/kW
-    "expander_cost": 500.0,         # $/kW (takes effect once the expander lands in 12.4)
-    "hx_cost": 300.0,               # $/m2 (cooler; Lee Eq.16 C_hx; added 2026-07-16)
+    "expander_cost": 500.0,         # $/kW (expander, 10.4)
+    "hx_cost": 300.0,               # $/m2 (cooler; Lee Eq.16 C_hx)
     "installation_factor": 1.6,     # f_in (multiplies total CAPEX)
     "capital_charge_rate": 0.2,     # /y (annual capital charge rate)
     "electricity_cost": 0.04,       # $/kWh
@@ -50,10 +49,8 @@ def feed_co2_t_per_h(feed: dict[str, Any]) -> float:
     """Compute the CO2 mass flow [t/h] in the feed from case.yaml.feed.
 
     **TOTFLOW is interpreted as a molar flow [kmol/h]**: case.yaml writes flowbase: MASS,
-    but the smoke_feed run of 2026-07-10 established by measurement that TOTFLOW actually
-    acts as a molar flow (totflow=2.44e6 -> total molar flow at V0 of 2.44e6 kmol/h; this
-    is also consistent with the ver2 run12 record "totflow=1000 gives feed CO2=150", i.e.
-    the same behaviour since ver2). Hence
+    but measurement established that TOTFLOW actually acts as a molar flow
+    (totflow=2.44e6 -> total molar flow at V0 of 2.44e6 kmol/h). Hence
     CO2 mass flow = totflow[kmol/h] x co2_frac x MW_CO2 / 1000.
 
     The guard is kept as a detector for deviations from the configuration combination that
@@ -102,7 +99,7 @@ def cost_per_tco2(
     Fig.3/4, the -2% gap being the omitted HX).
     A_hx is computed by the simulator from the cooler blocks via Lee Eq.5/6 (U=132.5 W/m2K,
     cooling water 20->25 degC, counter-current LMTD) and carried in Metrics.hx_area_m2
-    (added 2026-07-16).
+    .
 
     Parameters
     ----------
@@ -164,14 +161,14 @@ def membrane_areas_from_x(
 
 @dataclass
 class Metrics:
-    """Minimal metric set needed for fitness evaluation inside the GA loop (ARCHITECTURE 5.2)."""
+    """Minimal metric set needed for fitness evaluation inside the inner optimisation loop (ARCHITECTURE 5.2)."""
 
     specific_energy: float                        # kWh/tCO2
     purity: float                                 # CO2 mol fraction [0, 1]
     recovery: float                               # CO2 recovery [0, 1]
     energy_breakdown: dict[str, float] = field(default_factory=dict)  # block -> WNET [kW]
     hx_area_m2: float = 0.0                       # total heat-transfer area of the auto coolers [m2]
-                                                  # (Lee Eq.5/6; HX cost added 2026-07-16)
+                                                  # (Lee Eq.5/6; HX cost)
 
     @classmethod
     def bad(cls) -> "Metrics":
@@ -192,7 +189,7 @@ class DetailedResult:
 class Evaluator(Protocol):
     """Abstract evaluation boundary (ARCHITECTURE 5.2).
 
-    The GA invokes evaluation through this boundary. topology / ga.py see nothing but
+    The inner optimizer invokes evaluation through this boundary. topology / ga.py / bo.py see nothing but
     this Protocol.
     """
 

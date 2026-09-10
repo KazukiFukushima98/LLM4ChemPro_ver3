@@ -4,7 +4,7 @@ Injects a dummy worker (_dummy_worker.py) to exercise spawn, the result stream,
 stall detection, kill, bad-filling and the preservation of partial results,
 without the real thing.
 
-A natural wedge is timing-dependent (see COORDINATION), so a forced hang is used
+A natural wedge is timing-dependent (timing-dependent), so a forced hang is used
 instead. The parent treats a wedge and a forced hang identically ("timeout ->
 kill"), so this is sufficient.
 

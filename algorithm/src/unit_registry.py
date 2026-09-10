@@ -1,10 +1,10 @@
-"""Registry mapping unit types to GA variable definitions, bounds and structure templates.
+"""Registry mapping unit types to optimisation variable definitions, bounds and structure templates.
 
 Responsibilities:
-- Continuous variables (parameters the GA moves) and default bounds per unit type
+- Continuous variables (parameters the inner optimizer moves) and default bounds per unit type
 - Structure template per unit type (the set of outlet port names)
 - bounds_override on the unit data takes precedence over the defaults
-- Robeson membrane model (ver3 12.1): permeance_CO2 becomes a GA variable and the
+- Robeson membrane model (10.1): permeance_CO2 is an optimisation variable and the
   selectivity is derived from the Robeson 2008 CO2/N2 upper bound (referred to a
   0.1 um membrane thickness)
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 # =========================================================
-# Robeson membrane model (ver3 12.1)
+# Robeson membrane model (10.1)
 # =========================================================
 #
 # Unit conversion: the permeance unit of the Aspen GasPermModule is m3(STP)/(m2.h.bar).
@@ -78,20 +78,18 @@ def is_tie_mode(membrane_model: dict[str, Any] | None) -> bool:
 
 
 # Default bounds of the continuous variables (per unit type)
-# ver3 (12.3): consistent with S2.6 of the prior work Lee et al., J. Membr. Sci. 563 (2018) 820-834.
+# (10.3): consistent with S2.6 of the prior work Lee et al., J. Membr. Sci. 563 (2018) 820-834.
 #   - area: [1e5, 1.5e6] m^2 per stage (the feed is also scaled up to Lee's 500 Nm^3/s
 #     equivalent; see feed.totflow in case.yaml. The cost model is linear, so $/tCO2 is
 #     scale-invariant)
 #   - p_permeate: vacuum pump suction pressure 0.1-1 bar (0.01 bar = 10 mbar is
 #     industrially unrealistic. The upper limit is 0.99 to avoid zero driving force)
-#   - COMP.outlet_pressure: in the blower campaign (run26 onward, user decision
-#     2026-07-15) this is [1.1, 1.1] = fixed (make_ga_variables drops lo==hi from the
-#     GA/BO variables). It enforces the Merkel/MTR-type scenario in which every membrane
+#   - COMP.outlet_pressure: in the blower campaign this is [1.1, 1.1] = fixed
+#     (make_ga_variables drops lo==hi from the optimisation variables). It enforces the Merkel/MTR-type scenario in which every membrane
 #     inlet is unified at 1.1 bar, so any COMP the agent adds later is also a blower with
 #     no variable. Writing anything other than 1.1 into params is rejected by the
 #     fixed-parameter guard in apply_ss.
-#     For the Lee-consistent variable-compression campaign (run25) the value was
-#     [1.0, 4.0]; see f2424a1.
+#     For a Lee-consistent variable-compression campaign the value would be [1.0, 4.0].
 UNIT_BOUNDS: dict[str, dict[str, list[float]]] = {
     "MEMB": {
         "area":       [100000.0, 1500000.0],
@@ -100,20 +98,19 @@ UNIT_BOUNDS: dict[str, dict[str, list[float]]] = {
     "COMP": {
         "outlet_pressure": [1.1, 1.1],
     },
-    # Expander (ver3 12.4): no GA variable (the outlet pressure is fixed by
+    # Expander (10.4): no optimisation variable (the outlet pressure is fixed by
     # params.outlet_pressure, default 1 bar). The agent places it as a structural part on a
     # high-pressure path (e.g. retentate after compression) to recover power.
     "EXP": {},
-    # Cooler/heater (added during the ver3 12.4 cross-check): no GA variable
+    # Cooler/heater (10.4): no optimisation variable
     # (params.temperature [degC]; params.pressure is the PRES spec of the Aspen Heater,
-    # 0 meaning no pressure drop). Uses the builder's _create_heater (inherited from ver1,
-    # a proven asset). Placed as an intercooler that brings hot compressed gas back to the
+    # 0 meaning no pressure drop). Uses the builder's _create_heater. Placed as an intercooler that brings hot compressed gas back to the
     # membrane operating temperature (cooling-water cost is outside the model, consistent
     # with the decision to omit HX).
     "HEAT": {},
 }
 
-# Declaration of the continuous variables (used to assemble the GA variable names)
+# Declaration of the continuous variables (used to assemble the optimisation variable names)
 _UNIT_GA_VARS: dict[str, list[dict[str, str]]] = {
     "MEMB": [
         {"suffix": "area",   "param": "area"},
@@ -153,7 +150,7 @@ def make_ga_variables(
     unit_data: dict[str, Any] | None = None,
     membrane_model: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return the list of continuous GA variables belonging to a single unit.
+    """Return the list of continuous optimisation variables belonging to a single unit.
 
     Parameters
     ----------
@@ -164,7 +161,7 @@ def make_ga_variables(
         `bounds_override: {param_name: [lo, hi]}`, that takes precedence over the
         UNIT_BOUNDS default for the given param.
     membrane_model : dict | None
-        The membrane_model: section of case.yaml (12.1). When given with tie=False
+        The membrane_model: section of case.yaml (10.1). When given with tie=False
         (independent membrane per stage), a permeance_CO2 variable `{unit}_perm` is
         added to each MEMB. Under tie=True (same membrane for every stage) the shared
         variable is added once at the front by topology.continuous_variables instead
@@ -187,11 +184,11 @@ def make_ga_variables(
         param = spec["param"]
         bounds = overrides.get(param, UNIT_BOUNDS[unit_type][param])
         if bounds[0] == bounds[1]:
-            # Fixed parameter (2026-07-15): setting a bounds_override to lo==hi drops it
-            # from the GA/BO variables (the value is then carried by the fixed value in
+            # Fixed parameter: setting a bounds_override to lo==hi drops it
+            # from the optimisation variables (the value is then carried by the fixed value in
             # units[name].params, so the seed must write the same value into params too).
             # This is the clean way to keep a zero-width dimension out of BO's
-            # normalisation. Used by run26 for "no feed compression = pout fixed at 1.1 bar".
+            # normalisation. Used for "no feed compression = pout fixed at 1.1 bar".
             continue
         variables.append({
             "name":       f"{unit_name}_{spec['suffix']}",

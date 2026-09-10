@@ -3,7 +3,7 @@
 Operations (ARCHITECTURE 6.2):
     add_unit          : add a unit (always engaged; outlet vertices are numbered
                         deterministically from STRUCTURE_TEMPLATES)
-    add_gated_unit    : add a unit as a GA toggle (the feed becomes a bypass
+    add_gated_unit    : add a unit as an optimizer-decided toggle (the feed becomes a bypass
                         candidate, i.e. engagement becomes a binary variable.
                         When OFF, active_topology prunes the unit away. 6.2)
     delete_unit       : delete a unit (inflows are rerouted to residue, outflows
@@ -45,8 +45,8 @@ from unit_registry import STRUCTURE_TEMPLATES, UNIT_BOUNDS, get_outlet_ports  # 
 INNER_ARC_TYPE: dict[str, dict[str, str]] = {
     "MEMB": {"permeate": "membrane_permeate", "retentate": "membrane_retentate"},
     "COMP": {"outlet": "compressor"},
-    "EXP":  {"outlet": "expander"},   # expander (ver3 12.4)
-    "HEAT": {"outlet": "heater"},     # cooler/heater (added during the ver3 12.4 cross-check)
+    "EXP":  {"outlet": "expander"},   # expander (10.4)
+    "HEAT": {"outlet": "heater"},     # cooler/heater (10.4)
 }
 
 
@@ -55,9 +55,9 @@ class ApplyError(ValueError):
 
 
 def _enforce_fixed_params(unit_type: str, unit: str, params: dict[str, Any]) -> None:
-    """Enforce fixed parameters (lo==hi in UNIT_BOUNDS) (2026-07-15).
+    """Enforce fixed parameters (lo==hi in UNIT_BOUNDS).
 
-    Parameters with lo==hi never become GA/BO variables, so the value in params is
+    Parameters with lo==hi never become optimisation variables, so the value in params is
     what actually reaches the simulation; a proposal writing a different value would
     slip past the campaign definition (e.g. blower fixed at 1.1 bar). Fill in the
     fixed value when unspecified, and reject any differing value explicitly.
@@ -162,7 +162,7 @@ def op_add_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
 
 
 def op_add_gated_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
-    """Add a unit as a toggle whose on/off state is decided by the GA (structure as a GA variable).
+    """Add a unit as a toggle whose on/off state is decided by the inner optimizer (structure as an optimisation variable).
 
     Whereas `add_unit` adds a unit permanently (always engaged), this operation makes
     engagement a binary candidate (q_k). Concretely, it creates a dedicated new inlet
@@ -183,7 +183,7 @@ def op_add_gated_unit(ss: dict[str, Any], op: dict[str, Any]) -> None:
     Note: feed_from must be the source of the single stream being intercepted. If any
     other fixed outgoing arc remains at feed_from, out-degree > 1 when the candidate is
     ON and is_buildable rejects it (the same discipline as recycle toggle pairs; see the
-    playbook). This consumes two binaries (check max_binary_variables yourself).
+    agent instruction sheet). This consumes two binaries (check max_binary_variables yourself).
     """
     unit_type = op["unit_type"]
     unit = op["unit"]
@@ -396,7 +396,7 @@ def op_delete_arc(ss: dict[str, Any], op: dict[str, Any]) -> None:
     # Zombie-unit guard: reject the deletion if `to` is some unit's inlet and removing
     # this arc would leave no feed arc to that inlet anywhere in the SS. A unit that has
     # lost its feed path is pruned by active_topology for every q, so it can never be
-    # built while its continuous variables linger in the GA chromosome — a state that
+    # built while its continuous variables linger in the variable vector — a state that
     # validate (outside the scope of items 7/8) cannot detect either.
     # To remove the unit itself, use delete_unit (the same division of roles as the
     # owned-arc rejection).
@@ -457,7 +457,7 @@ def apply_change(ss: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
     Appending to history and incrementing iteration also happen here.
     validate is not called (main / apply_from_files do that).
     """
-    # Schema guard (against the real incident in run24 iter_001): if the agent writes a
+    # Schema guard: if the agent writes a
     # wrong top-level key such as "changes", the old implementation silently succeeded
     # with an empty, zero-operation application, and the next iteration (hours long) then
     # ran on the same SS unnoticed. Fail explicitly when operations is missing, empty,
@@ -557,7 +557,7 @@ def _load_membrane_model() -> dict[str, Any] | None:
     """Read membrane_model from case.yaml for display (None if absent; never raises).
 
     apply_ss does not depend on the case logically; this is referenced only so that the
-    number and names of the continuous variables in the summary match those of GA/BO
+    number and names of the continuous variables in the summary match those of the inner optimizer
     (which derive them including membrane_model).
     """
     case_path = os.path.normpath(

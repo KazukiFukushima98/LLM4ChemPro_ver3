@@ -6,7 +6,7 @@ Responsibilities:
 - Validity checking: validate (raises TopologyError on violation)
 - Deriving auxiliary units: mixer_vertices / splitter_vertices / auto_vps
 - Numbering vertex IDs and candidate IDs (max+1, never renumbered)
-- Deriving GA variable lists: binary_variables / continuous_variables
+- Deriving optimisation variable lists: binary_variables / continuous_variables
 - Generating the adjacency matrix for the paper: to_matrix
 
 In-memory representation:
@@ -111,7 +111,7 @@ def next_candidate_id(arcs: dict[tuple[str, str], dict[str, Any]]) -> str:
 def _ensure_id_counters(ss: dict[str, Any]) -> dict[str, int]:
     """Ensure and return ss["id_counters"] (the largest numbers ever issued).
 
-    Legacy SS files without this key (e.g. ss_seed.json) are initialized from the
+    SS files without this key (e.g. ss_seed.json) are initialized from the
     current maxima (backward compatibility). If hand-editing left a counter behind
     the current maximum, it is raised to that maximum as well (defensive).
     """
@@ -191,7 +191,7 @@ def _from_json(raw: dict[str, Any]) -> dict[str, Any]:
     }
     if "id_counters" in raw:
         ss["id_counters"] = dict(raw["id_counters"])
-    # Legacy form (no id_counters): initialize from current maxima (backward
+    # No id_counters: initialize from current maxima (backward
     # compatible; ss_seed.json needs no change)
     _ensure_id_counters(ss)
     return ss
@@ -291,7 +291,7 @@ def active_topology(
         # Pruning removed the destination of a "live" stream as collateral (e.g. a
         # recycle candidate into a dead unit's outlet vertex is ON). For this q the
         # genotype and the actual structure disagree, so mark it and let is_buildable
-        # reject it with a reason (GA/BO then take the BAD_VALUE path).
+        # reject it with a reason (the optimizer then takes the BAD_VALUE path).
         topo["pruning_severed"] = severed
     return topo
 
@@ -306,7 +306,7 @@ def _prune_dead_units(
 
     Turning a candidate arc OFF (e.g. a bypass toggle) removes the feed to a membrane
     inlet. Such a membrane is not actually built, so it is removed from the concrete
-    topology to give a clean "membrane-off" sub-structure. This lets the GA compare
+    topology to give a clean "membrane-off" sub-structure. This lets the optimizer compare
     "with membrane" vs "without membrane" fairly (it prevents a zero-feed membrane
     from always landing in the penalty region).
 
@@ -680,7 +680,7 @@ def mixer_vertices(topology: dict[str, Any]) -> set[str]:
         (3) Sink vertices (role=product/residue) (turned into streams to secure a
             measurement point)
         (4) Unit inlet vertices fed by a pass-through arc (a feed/process/recycle arc
-            with no unit) (2026-07-14). The builder wires a pass-through arc only as an
+            with no unit). The builder wires a pass-through arc only as an
             "F(IN) registration on the destination Mixer", so without a Mixer nobody
             creates the inlet stream and it is left isolated (this covers the pre-mixer
             placement feed->junction->COMP and non-membrane units from add_gated_unit;
@@ -744,7 +744,7 @@ def auto_vps(topology: dict[str, Any]) -> dict[str, str]:
 
 
 # =========================================================
-# Variable derivation (used to assemble the GA chromosome)
+# Variable derivation (used to assemble the optimisation variable vector)
 # =========================================================
 
 def binary_variables(ss: dict[str, Any]) -> list[dict[str, Any]]:
@@ -778,7 +778,7 @@ def continuous_variables(
     Order:
         - Outer: the insertion order of units
         - Within each unit: the declaration order in unit_registry
-        - When membrane_model (12.1) is in tie mode, the shared permeance variable
+        - When membrane_model (10.1) is in tie mode, the shared permeance variable
           `MEMB_perm` (unit_param=["MEMB*", "permeance_CO2"]) is placed **first**.
           It is pinned first so that positional alignment with the post-pruning
           topology (x_for_topology) is preserved regardless of which membranes

@@ -1,8 +1,8 @@
-"""Unit tests for the mass-balance guard in _extract_metrics (COORDINATION Fix A).
+"""Unit tests for the mass-balance guard in _extract_metrics.
 
 A recycle tear can report "converged" over headless COM and still land on a
-non-physical point (recovery > 1); this was observed in run12/iter_002 (product
-CO2 188.5 > feed 150, i.e. 125.67% recovery). These tests check that the
+non-physical point (recovery > 1; e.g. product CO2 188.5 > feed 150, i.e. 125.67%
+recovery). These tests check that the
 cross-check guard added to _extract_metrics rejects recovery >
 recovery_physical_max as BAD.
 
@@ -78,7 +78,7 @@ class TestMassBalanceGuard(unittest.TestCase):
         return ev._extract_metrics(aspen=None, product_vid="V7", energy_blocks=["MEMB1"])
 
     def test_recovery_above_one_is_bad(self):
-        """Recovery 1.257 (the non-physical point from run12) -> rejected as BAD."""
+        """Recovery 1.257 (a non-physical point) -> rejected as BAD."""
         m = self._extract(prod_mf=188.5)  # 188.5 / 150 = 1.2567
         self.assertTrue(_is_bad(m), f"non-physical point (recovery>1) not marked BAD: {m}")
 
@@ -157,7 +157,7 @@ class TestEnergyGuard(unittest.TestCase):
     f"cannot import simulator (e.g. pywin32 missing): {_SIM_IMPORT_ERR}",
 )
 class TestBuildUnitParams(unittest.TestCase):
-    """Assembling unit_params from x (12.1: tie expansion and Robeson-derived N2). A pure function, no Aspen needed."""
+    """Assembling unit_params from x (10.1: tie expansion and Robeson-derived N2). A pure function, no Aspen needed."""
 
     _TOPO2 = {"units": {"MEMB1": {}, "MEMB2": {}}}
 

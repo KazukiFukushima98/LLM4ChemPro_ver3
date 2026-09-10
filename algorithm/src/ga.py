@@ -42,7 +42,7 @@ def _fitness(obj_value: float, purity: float, recovery: float,
              targets: dict, penalty_w: float) -> float:
     """f = obj + lambda*[max(0, pi_min - pi)^2 + max(0, rho_min - rho)^2]
 
-    obj is the objective value (energy or cost, following the objective switch of 12.2).
+    obj is the objective value (energy or cost, following the objective switch of 10.2).
     """
     if obj_value >= BAD_VALUE:
         return BAD_VALUE
@@ -84,7 +84,7 @@ def run_ga(
     n_gen     = ga_cfg["n_gen"]
     targets   = case["optimization_targets"]
 
-    # ---- objective switch (12.2): energy (legacy) / cost ($/tCO2) ----
+    # ---- objective switch (10.2): energy / cost ($/tCO2) ----
     cost_mode = str(targets.get("objective", "")).strip() == "minimize_cost"
     if cost_mode:
         econ = {**ECONOMICS_DEFAULTS, **(case.get("economics") or {})}
@@ -204,7 +204,7 @@ def run_ga(
 
         pop[:] = offspring
         hof.update(pop)
-        # Elitism: replace the worst individual with a clone of best (per COORDINATION 4b-(1)).
+        # Elitism: replace the worst individual with a clone of best .
         # Overwriting pop[-1] would merely erase whichever individual happened to land last and
         # gives no guarantee that best survives, so pick the maximum fitness explicitly
         # (the worst, since this is a minimization) and replace that one.

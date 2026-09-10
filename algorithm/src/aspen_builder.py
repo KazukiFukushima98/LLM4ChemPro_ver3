@@ -1,7 +1,7 @@
 """Dynamically build an Aspen model from a concrete topology.
 
-A faithful port of the old LLM4ChemPro/algorithm/src/aspen_builder.py.
-Changes are limited to the three points defined in ARCHITECTURE 3.2 / 3.4 / 4 / 10:
+Concrete topology -> Aspen Plus COM flowsheet.
+The interface follows ARCHITECTURE 3.2 / 3.4 / 4 / 9:
 
   (1) Input interface
       old: (adj_matrix, arc_definitions, unit_params, aspen_file)
@@ -12,18 +12,17 @@ Changes are limited to the three points defined in ARCHITECTURE 3.2 / 3.4 / 4 / 
       of the vid / unit name.
 
   (2) Sink vertices added as Mixer rule (3)
-      The old _find_mixer_vertices had rules (1)(2) only. In ver2, sinks
+      Sinks
       (role=product/residue) are turned into Mixers so that they carry streams, which
       fixes the purity/recovery measurement points on the sinks (ARCHITECTURE 3.4).
-      The rule is centralized in topology.mixer_vertices, so we delegate to it and
-      _find_mixer_vertices is removed here (avoiding a duplicate definition).
+      The rule is centralized in topology.mixer_vertices, so we delegate to it.
 
   (3) Removal of the feed default
       The old _configure_feed carried a DAC default (420 ppm, MOLE-FRAC, etc.); it is
       removed. The builder holds no feed default and only ensures in Step 2 that the
       feed stream exists. Composition, flow rate and basis
       (FLOWBASE/TOTFLOW/CARBO-01/NITRO-01) are overridden by AspenEvaluator (phase 4)
-      from case.yaml (ARCHITECTURE 10).
+      from case.yaml (ARCHITECTURE 9).
 
 Everything else (membrane block creation, auto-VP insertion, naming rules, port
 connection logic) follows the old implementation.
@@ -35,7 +34,7 @@ Stream naming:
   MIXV{j}   : Mixer block name ({j} is vid numeric part)
   MEMB{n}   : membrane block (unit name as-is)
   VP{n}/VPI{n} : auto-VP block and its inlet stream (n matches MEMB{n})
-  VPO{n}/HXV{n}: intermediate stream at the auto-VP outlet and its auto-cooler (35 degC, ver3 12.4)
+  VPO{n}/HXV{n}: intermediate stream at the auto-VP outlet and its auto-cooler (35 degC, 10.4)
   HCI{n}/HXC{n}: intermediate stream at the COMP{n} outlet and its auto-cooler (same)
 
 NOTE: Aspen does not allow underscores in block or stream names.
@@ -54,8 +53,7 @@ def kill_aspen_image(timeout: float = 20) -> None:
     """Run "taskkill /f /im AspenPlus.exe" with a timeout (cleanup on the child-process side).
 
     os.system has no timeout and can block the caller indefinitely on a wedged Aspen that
-    cannot be killed (the same failure mode as the 85-minute hang in run13; already fixed
-    on the subprocess_evaluator side). All Aspen cleanup inside a child process (worker)
+    cannot be killed (the subprocess_evaluator side guards against the same failure mode). All Aspen cleanup inside a child process (worker)
     goes through this function.
     Failures and timeouts are swallowed: the top priority is not to stall the evaluation
     pipeline over a failed cleanup, and any leftover Aspen is reclaimed by the taskkill at
@@ -113,7 +111,7 @@ def build_aspen_from_epnt(topology, aspen_file):
     # Step 0: Identify Mixer vertices
     #   (1) src vertex of membrane_permeate/retentate arcs
     #   (2) any vertex with in-degree >= 2
-    #   (3) sink (product/residue) vertices  <- added in ver2 (measurement points as streams)
+    #   (3) sink (product/residue) vertices  (measurement points as streams)
     # Rule is centralized in topology.mixer_vertices; delegate to it.
     # --------------------------------------------------
     mixer_set = _topology_mixer_vertices(topology)
@@ -153,7 +151,7 @@ def build_aspen_from_epnt(topology, aspen_file):
     #   Terminal vertex: no outgoing arcs AND not a Mixer vertex AND
     #                    no unit block on any incoming arc (only no-op arcs)
     #   → Would become an unconnected stream in Aspen, so skip creation.
-    #   In ver2, sinks are always Mixer vertices (rule 3), so they are NOT terminal —
+    #   Sinks are always Mixer vertices (rule 3), so they are NOT terminal —
     #   they get representative streams as measurement points (ARCHITECTURE 3.4).
     # --------------------------------------------------
     terminal_vertices = _find_terminal_vertices(vertices, arcs, mixer_set)
@@ -176,11 +174,9 @@ def build_aspen_from_epnt(topology, aspen_file):
         mixer_name = f"MIXV{_num(j)}"
         block_node.Elements.Add(f"{mixer_name}!Mixer")
         aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Input\T_EST").value = 25
-        # ver3 12.4: PRES=0 means "follow the minimum pressure of the inlet streams".
-        # The old fixed value of 1.0 was a trap: even when the feed was pressurized, the
-        # membrane-inlet Mixer reset it to 1 bar and nullified the COMP.
-        # Results are unchanged for existing all-1-bar configurations (regression
-        # confirmed on the real tool, 2026-07-10).
+        # 10.4: PRES=0 means "follow the minimum pressure of the inlet streams".
+        # A fixed value would be a trap: even when the feed is pressurized, the
+        # membrane-inlet Mixer would reset it to 1 bar and nullify the COMP.
         aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Input\PRES").value  = 0.0
         for s in mixer_inputs[j]:
             aspen.Tree.FindNode(rf"\Data\Blocks\{mixer_name}\Ports\F(IN)").Elements.Add(s)
@@ -200,7 +196,7 @@ def build_aspen_from_epnt(topology, aspen_file):
     # Step 5: Feed stream existence is established by Step 2 (feed vertices are sources
     # with outgoing arcs, so they are NOT terminal). The actual feed spec
     # (FLOWBASE/TOTFLOW/CARBO-01/NITRO-01) is applied later by AspenEvaluator via case.yaml.
-    # The old _configure_feed (DAC default 420 ppm) is intentionally removed (ARCHITECTURE 10).
+    # The builder itself carries no feed defaults (ARCHITECTURE 9).
     # --------------------------------------------------
 
     return aspen, auto_vps
@@ -227,7 +223,7 @@ def set_continuous_variables(aspen, unit_params):
             )
             if node is not None:
                 node.value = params["p_permeate"]
-        # ver3 12.1 (Robeson membrane model): branch that writes permeance as a GA variable.
+        # 10.1 (Robeson membrane model): branch that writes permeance as an optimisation variable.
         # The node paths are identical to the initial setup in _create_membrane (this only
         # adds an interface).
         if "permeance_CO2" in params:
@@ -268,7 +264,7 @@ def _find_terminal_vertices(vertices, arcs, mixer_vertices):
       2. Not a Mixer vertex
       3. No unit block on any incoming arc (only no-op arcs)
 
-    In ver2, sinks (product/residue) are always Mixer vertices (rule 3 in
+    Sinks (product/residue) are always Mixer vertices (rule 3 in
     topology.mixer_vertices), so sinks are NEVER terminal — they get streams
     as measurement points.
     """
@@ -332,13 +328,13 @@ def _create_and_connect_unit(aspen, block_node, unit_name, arcs,
         )
 
 
-# ver3 12.4 (user decision, 2026-07-10): cooling temperature [degC] applied automatically
+# 10.4: cooling temperature [degC] applied automatically
 # at the outlet of compression equipment (auto-VP and explicit COMP). Same as the membrane
 # operating temperature in Lee (2018). Without intercooling, the heat of compression
 # cascades downstream and inflates the power (Fig.3a reproduction: P_tot 1.38x the paper,
 # vs 0.94x with 35 degC cooling), and it also exceeds the allowable temperature of polymeric
 # membranes. Like the auto-VP, cooling is standard engineering equipment that the builder
-# inserts automatically and that is not exposed to the GA/SST search. Heater duty is not
+# inserts automatically and that is not exposed to the optimizer/SST search. Heater duty is not
 # electrical power, so it is not counted in energy (cooling-water cost is outside Lee's
 # model as well).
 AUTO_COOLER_TEMP_C = 35.0
@@ -419,7 +415,7 @@ def _create_membrane(aspen, block_node, unit_name, arcs, params, mixer_vertices,
             aspen.Tree.FindNode(rf"\Data\Blocks\{vp_name}\Input\OPT_SPEC").value   = "PRES"
             aspen.Tree.FindNode(rf"\Data\Blocks\{vp_name}\Input\PRES").value       = 1.0
             aspen.Tree.FindNode(rf"\Data\Blocks\{vp_name}\Ports\F(IN)").Elements.Add(vpi_name)
-            # Auto-cooling (12.4): VP{n} -> VPO{n} -> HXV{n}(35 degC) -> out
+            # Auto-cooling (10.4): VP{n} -> VPO{n} -> HXV{n}(35 degC) -> out
             _attach_cooler(
                 aspen, block_node, stream_node,
                 rf"\Data\Blocks\{vp_name}\Ports\P(OUT)",
@@ -434,7 +430,7 @@ def _create_membrane(aspen, block_node, unit_name, arcs, params, mixer_vertices,
 
 
 def _create_compressor(aspen, block_node, unit_name, arcs, params, mixer_vertices):
-    """Create a Compr block and connect its ports (with an auto-cooler at the outlet, 12.4)."""
+    """Create a Compr block and connect its ports (with an auto-cooler at the outlet, 10.4)."""
     stream_node = aspen.Tree.FindNode(r'\Data\Streams')
     comp_num = unit_name.replace("COMP", "")
     block_node.Elements.Add(f"{unit_name}!Compr")
@@ -445,7 +441,7 @@ def _create_compressor(aspen, block_node, unit_name, arcs, params, mixer_vertice
 
     for i, j, _ in arcs:
         aspen.Tree.FindNode(rf"\Data\Blocks\{unit_name}\Ports\F(IN)").Elements.Add(i)
-        # Auto-cooling (12.4): COMP{n} -> HCI{n} -> HXC{n}(35 degC) -> out
+        # Auto-cooling (10.4): COMP{n} -> HCI{n} -> HXC{n}(35 degC) -> out
         _attach_cooler(
             aspen, block_node, stream_node,
             rf"\Data\Blocks\{unit_name}\Ports\P(OUT)",
@@ -455,11 +451,11 @@ def _create_compressor(aspen, block_node, unit_name, arcs, params, mixer_vertice
 
 
 def _create_expander(aspen, block_node, unit_name, arcs, params, mixer_vertices):
-    """Create a Compr block in TURBINE mode (expander, power recovery; ver3 12.4).
+    """Create a Compr block in TURBINE mode (expander, power recovery; 10.4).
 
     Identical in form to _create_compressor (only MODEL_TYPE differs, TURBINE). The outlet
     pressure comes from params outlet_pressure (default 1.0 bar = discharge to atmosphere)
-    and is not a GA variable. WNET appears in energy_breakdown as a negative value
+    and is not an optimisation variable. WNET appears in energy_breakdown as a negative value
     (recovered power) and is counted in the specific energy and cost.
     """
     block_node.Elements.Add(f"{unit_name}!Compr")

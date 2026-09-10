@@ -29,14 +29,13 @@ class AspenCrashError(RuntimeError):
     """Raised when Aspen crashes (detected via new .dmp file in dmp_dir)."""
 
 
-# Constants for sizing the HX (automatic cooler) area (Lee 2018 section 2.3;
-# HX cost added 2026-07-16)
+# Constants for sizing the HX (automatic cooler) area (Lee 2018 section 2.3)
 HX_U_W_M2K = 132.5     # overall heat transfer coefficient [W/m2K] (literature median for gas-cooling water)
 HX_CW_IN_C = 20.0      # cooling water inlet [degC]
 HX_CW_OUT_C = 25.0     # cooling water outlet [degC]
 HX_GAS_TOUT_C = 35.0   # gas outlet [degC] (same as AUTO_COOLER_TEMP_C = membrane operating temperature)
 # QCALC unit conversion: in this .apw the unit set gives power (WNET) in kW but heat
-# flow (QCALC) in cal/s. Verified on the real model (2026-07-16): VP1's QCALC/WNET is
+# flow (QCALC) in cal/s. Verified on the real model: VP1's QCALC/WNET is
 # exactly 4.1868, i.e. the IT calorie factor (a cross-check exploiting the physics that
 # a VP does adiabatic compression followed by cooling all the way back to 35 degC, so
 # duty ~= work).
@@ -76,7 +75,7 @@ def build_unit_params(
 
     - An entry whose unit name ends with "*" (the tie-shared permeance "MEMB*") is
       expanded to the same value for every unit in the topology carrying that prefix
-    - If membrane_model (12.1) is given, units that have permeance_CO2 get
+    - If membrane_model (10.1) is given, units that have permeance_CO2 get
       permeance_N2 = permeance_CO2 / alpha derived from the Robeson upper bound
 
     A pure function independent of Aspen (it touches no COM, so it is unit-testable).
@@ -121,8 +120,8 @@ def run_aspen_with_timeout(aspen, timeout=120, dmp_dir=None):
     except Exception as e:
         # If starting the run itself fails, the engine state cannot be trusted.
         # Rather than "mark just this x bad and continue", convert to AspenCrashError so
-        # the caller's rebuild path takes over (a ver2 robustness measure that keeps a
-        # broken engine from wiping out the rest of the group; the core logic is unchanged).
+        # the caller's rebuild path takes over (this keeps a broken engine from wiping
+        # out the rest of the group).
         raise AspenCrashError(f"Reinit/Run2 failed (engine unusable): {e}") from e
 
     start = time.time()
@@ -144,7 +143,7 @@ def run_aspen_with_timeout(aspen, timeout=120, dmp_dir=None):
                     aspen.Engine.Stop()
                 except Exception:
                     pass
-                # COORDINATION #4: Engine.Stop alone does not work on a hang, so force a kill
+                # Engine.Stop alone does not work on a hang, so force a kill
                 # (with a timeout; os.system would itself get stuck here on an unkillable Aspen)
                 kill_aspen_image()
                 time.sleep(3)
@@ -202,16 +201,12 @@ class AspenEvaluator:
             return default
 
     def _apply_feed(self, aspen) -> None:
-        """Write the case.yaml feed specification to stream V0 (7 items; reproduces the old composition).
+        """Write the case.yaml feed specification to stream V0 (7 items).
 
-        The old code set the feed in two stages: _configure_feed (aspen_builder.py:371-382)
-        and _build_aspen inside evaluate_group (run_iteration.py:168-172). Since ver2 gives
-        the builder no feed defaults (ARCHITECTURE section 10), the combined result is set
-        here in one place.
-
-        Of the 7 items the old _configure_feed set, the 3 that evaluate_group did not
-        overwrite (BASIS / TEMP / PRES) were missing in ver2 and caused BAD_VALUE, so they
-        are added here.
+        The builder carries no feed defaults (ARCHITECTURE section 9), so the complete
+        specification (FLOWBASE / TOTFLOW / composition / BASIS / TEMP / PRES) is set here
+        in one place. BASIS / TEMP / PRES must be written explicitly: leaving them unset
+        causes BAD_VALUE.
         """
         feed = self._case["feed"]
         aspen.Tree.FindNode(r"\Data\Streams\V0\Input\BASIS\MIXED").value    = feed["basis"]
@@ -245,7 +240,7 @@ class AspenEvaluator:
 
         # energy_blocks = auto-VP names + explicit COMP/EXP unit names
         # (an EXP = expander has negative WNET, i.e. it counts as recovered power in the
-        # total. ver3 12.4)
+        # total. 10.4)
         vp_map = _auto_vps(topology)
         energy_blocks: list[str] = list(vp_map.values())
         for uname, udef in topology["units"].items():
@@ -253,7 +248,7 @@ class AspenEvaluator:
                 energy_blocks.append(uname)
 
         # coolers = automatic coolers as (block, inlet intermediate stream). Used to size
-        # the area for the HX cost (Lee Eq.5/6) (2026-07-16). Builder naming convention:
+        # the area for the HX cost (Lee Eq.5/6). Builder naming convention:
         # VP{n}->HXV{n}/VPO{n}, COMP{n}->HXC{n}/HCI{n}. An EXP has no cooler (expansion
         # lowers the temperature).
         coolers: list[tuple[str, str]] = []
@@ -291,7 +286,7 @@ class AspenEvaluator:
                 energy_bd[blk] = w
                 total_kw += w
 
-        # Total heat transfer area of the automatic coolers (Lee Eq.5/6, for the HX cost. 2026-07-16)
+        # Total heat transfer area of the automatic coolers (Lee Eq.5/6, for the HX cost)
         hx_area = 0.0
         for blk, inlet in (coolers or []):
             q_cal_s = self._safe(aspen, rf"\Data\Blocks\{blk}\Output\QCALC")
@@ -304,11 +299,11 @@ class AspenEvaluator:
 
         recovery = prod_mf / v0_mf
 
-        # Mass-balance guard (COORDINATION Fix A): even when a recycle tear reports
+        # Mass-balance guard: even when a recycle tear reports
         # "converged" under headless COM, it can settle on a non-physical point
         # (product CO2 > feed CO2, i.e. recovery > 1). A recovery > 1 violates the mass
         # balance, so this cross-check catches it and rejects the point as BAD (keeping
-        # the GA from chasing garbage solutions as the best). recovery_physical_max is
+        # the optimizer from chasing garbage solutions as the best). recovery_physical_max is
         # tunable in case.yaml (default 1.02).
         recovery_max = float(self._case.get("recovery_physical_max", 1.02))
         if recovery > recovery_max:
@@ -322,7 +317,7 @@ class AspenEvaluator:
         # (VP/COMP) exist, yet the WNET total is <= 0 = every node read failed (naming
         # mismatch, or values missed because the run did not converge).
         # Letting this through yields a "perfect" solution with zero specific energy that
-        # the GA/BO would then chase as a false best. Zero is never physically legitimate:
+        # the optimizer would then chase as a false best. Zero is never physically legitimate:
         # an auto-VP always does compression work from p_permeate (<=0.99 bar) to 1 bar.
         if energy_blocks and total_kw <= 0:
             print(
@@ -461,9 +456,8 @@ class AspenEvaluator:
                 print(f"    evaluate_detailed: run failed: {e}")
                 return DetailedResult(metrics=Metrics.bad())
 
-            # Corresponds to the old get_detailed_results:315-325. Iterates by vertex ID
-            # (n_vertices is not used).
-            # pressure_bar is for acceptance checking (2026-07-15): it is recorded so that
+            # Iterates by vertex ID.
+            # pressure_bar is for acceptance checking: it is recorded so that
             # the blower campaign's "all membrane inlets at 1.1 bar" can be confirmed
             # against measured pressures after a run (record-only).
             stream_results: dict = {}

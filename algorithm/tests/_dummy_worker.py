@@ -10,7 +10,7 @@ behaviour:
     full_hang    : return nothing and sleep forever (full wedge)
 
 Forced hangs are used because a natural wedge is timing-dependent (see
-COORDINATION) and cannot be tested deterministically. The parent treats a wedge
+timing-dependent) and cannot be tested deterministically. The parent treats a wedge
 and a forced hang identically ("timeout -> kill"), so this still exercises the
 mechanism.
 """

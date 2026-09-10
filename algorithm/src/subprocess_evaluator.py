@@ -1,6 +1,6 @@
 """Process-isolation supervisor (Evaluator Protocol implementation).
 
-A guaranteed last resort against the run6 wedge (an in-flight COM call that never
+A guaranteed last resort against the Aspen wedge (an in-flight COM call that never
 returns even after a server kill). The parent (this class) never touches COM; it
 spawns the child process aspen_worker.py per evaluation group, and the existing
 AspenEvaluator runs inside the child.
@@ -41,9 +41,8 @@ def _default_kill_aspen() -> None:
     """taskkill AspenPlus.exe (with a timeout).
 
     os.system has no timeout and can block the caller (the supervising thread)
-    indefinitely against a wedged Aspen that has become unkillable (COORDINATION:
-    the main cause of the 85-minute hang in run13 -- the "guaranteed last resort"
-    itself got stuck here). The subprocess.run timeout guarantees a return, so a
+    indefinitely against a wedged Aspen that has become unkillable (otherwise the
+    "guaranteed last resort" itself could get stuck here). The subprocess.run timeout guarantees a return, so a
     stuck kill never ties up the supervisor.
     """
     try:
@@ -82,8 +81,8 @@ class SubprocessEvaluator:
         # Upper bound on "no result received" before declaring a wedge. Must exceed the
         # in-band per-x timeout (et/dt). The lower bound is the legitimate silence of a
         # build plus an intermediate rebuild (~150s): going below it falsely kills healthy
-        # work, turning correct evaluations into spurious BAD_VALUEs that pollute GA/BO.
-        # Split by use: during GA (topology) only eval(et) applies, so keep it short; the
+        # work, turning correct evaluations into spurious BAD_VALUEs that pollute the optimizer.
+        # Split by use: during the inner optimisation (topology) only eval(et) applies, so keep it short; the
         # final detailed extraction (detailed) follows detail(dt). The buffer is 120s
         # (~90s for build/rebuild plus a 30s margin against false wedges; the old 90s
         # equalled the ~150s estimated ceiling of legitimate silence, i.e. zero margin,
@@ -101,7 +100,7 @@ class SubprocessEvaluator:
         # The default has a timeout (_default_kill_aspen); see its docstring.
         self._kill_aspen = kill_aspen or _default_kill_aspen
 
-        # Instrumentation (2026-07-15): wall-clock record per evaluation group.
+        # Instrumentation: wall-clock record per evaluation group.
         # run_iteration copies it into the timing field of results.json. Never used
         # for decisions or control (record-only).
         #   groups[i] = {mode, n_requested, n_results, wall_sec, wedged, rc,
@@ -200,7 +199,7 @@ class SubprocessEvaluator:
                     _eval_sec.append(round(_now - _t_last, 2))
                     _t_last = _now
         finally:
-            # Play the strongest card first (COORDINATION: fix for the ordering trap).
+            # Play the strongest card first.
             # proc.kill() is TerminateProcess -- a last resort that always works,
             # independent of how COM is stuck. Doing it first releases the worker's
             # in-flight COM handles as well, so the pipeline is guaranteed to move on.

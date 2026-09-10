@@ -1,6 +1,6 @@
 ---
 description: Analyse the latest results.json and propose/write the next ss_change.json (does not apply or run)
-argument-hint: <run dir, e.g. runs/run24>
+argument-hint: <run dir, e.g. runs/<name>>
 ---
 Act as the SST agent (`CLAUDE.md`, the instructions for this algorithm directory). Only make a proposal; do not apply or execute it. **Assume the session was opened in `algorithm/`** (run data lives in `runs/`).
 

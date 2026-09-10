@@ -1,4 +1,4 @@
-"""Unit tests for the evaluator's cost objective (ver3 12.2) (no Aspen required).
+"""Unit tests for the evaluator's cost objective (10.2) (no Aspen required).
 
 Verifies cost_per_tco2 / feed_co2_t_per_h / membrane_areas_from_x for consistency with
 Lee et al., J. Membr. Sci. 563 (2018) Table 1 / Eq.15-16.
@@ -28,7 +28,7 @@ from evaluator import (  # noqa: E402
 _FEED = {
     "flowbase": "MASS",
     "basis": "MOLE-FRAC",
-    "totflow": 80307.0,   # kmol/h (Lee's 500 Nm3/s. TOTFLOW is a molar flow as measured; smoke_feed)
+    "totflow": 80307.0,   # kmol/h (Lee's 500 Nm3/s. TOTFLOW is a molar flow as measured)
     "co2_frac": 0.15,
 }
 
@@ -40,7 +40,7 @@ def _case(economics: dict | None = None) -> dict:
 class TestFeedCO2MassFlow(unittest.TestCase):
 
     def test_molar_totflow_conversion(self):
-        # TOTFLOW is a molar flow [kmol/h] (measured with smoke_feed, 2026-07-10):
+        # TOTFLOW is a molar flow [kmol/h] (as measured):
         # CO2 t/h = totflow x co2_frac x 44/1000
         expected = 80307.0 * 0.15 * 44.0 / 1000.0   # ~= 530.03 t/h
         self.assertAlmostEqual(feed_co2_t_per_h(_FEED), expected, places=6)
@@ -104,7 +104,7 @@ class TestCostPerTCO2(unittest.TestCase):
 
 
 class TestHxCost(unittest.TestCase):
-    """Folding in the HX (automatic cooler) cost (2026-07-16; Lee Sec. 2.3 / Eq.5-6, Eq.16 C_hx)."""
+    """Folding in the HX (automatic cooler) cost (Lee Sec. 2.3 / Eq.5-6, Eq.16 C_hx)."""
 
     def test_hx_area_hand_computed(self):
         """A = |Q|/(U*LMTD). Q=-1000kW, T_in=150degC -> LMTD=(125-15)/ln(125/15)=51.88 K."""
@@ -155,7 +155,7 @@ class TestLeeReproduction(unittest.TestCase):
     """
 
     # Lee's feed: 500 Nm3/s, 13 mol% CO2 (0degC, 22.414 L/mol)
-    # TOTFLOW is a molar flow [kmol/h] (measured with smoke_feed): 22,307.5 mol/s x 3.6 = 80,307 kmol/h
+    # TOTFLOW is a molar flow [kmol/h] (as measured): 22,307.5 mol/s x 3.6 = 80,307 kmol/h
     _LEE_FEED = {
         "flowbase": "MASS", "basis": "MOLE-FRAC",
         "totflow": 500.0 / 0.022414 * 3.6,   # ~= 80,307 kmol/h

@@ -1,4 +1,4 @@
-"""Unit tests for the comparison target (12.6 monolithic optimization, baseline/) (no Aspen required).
+"""Unit tests for the comparison target (one-shot optimization, baseline/) (no Aspen required).
 
 Scope:
 - structural consistency of ss_lee2.json / ss_lee3.json (Lee Fig.2-style SS, with a fixed COMP per stage)
@@ -34,7 +34,7 @@ from run_baseline import assert_all_buildable, build_onehot_fixed_features, patc
 LEE2 = os.path.join(BASE, "ss_lee2.json")
 LEE3 = os.path.join(BASE, "ss_lee3.json")
 
-_MM = {"tie": False}  # per-stage independent membranes, as in run24
+_MM = {"tie": False}  # per-stage independent membranes
 
 
 class _SmoothMock:
@@ -116,7 +116,7 @@ class TestOnehotEnumeration(unittest.TestCase):
     def test_lee3_all_combos_buildable(self):
         """The same for the 3-stage version (all 4096 verified; the same check the runner performs).
 
-        Verified PASS over the full set with BASELINE_FULL=1 on 2026-07-12. Skipped in the everyday suite.
+        Run over the full set with BASELINE_FULL=1. Skipped in the everyday suite.
         """
         ss = T.load_ss(LEE3)
         assert_all_buildable(ss, build_onehot_fixed_features(ss))

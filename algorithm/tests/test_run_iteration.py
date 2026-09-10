@@ -162,7 +162,7 @@ class TestApplyGaOverrides(unittest.TestCase):
 
 
 class TestDetailedEvalRetry(unittest.TestCase):
-    """Retry on a transient wedge in the detailed evaluation (a regression test for the failure mode measured in run22)."""
+    """Retry on a transient wedge in the detailed evaluation (a regression test for that failure mode)."""
 
     class _FlakyEvaluator:
         """Mock that returns bad for the first fail_n calls and real values afterwards."""
@@ -188,7 +188,7 @@ class TestDetailedEvalRetry(unittest.TestCase):
         self.assertAlmostEqual(d.metrics.specific_energy, 999.0)
 
     def test_transient_wedge_recovers_on_retry(self) -> None:
-        """The pattern measured in run22: a wedge on the first call, real values recovered on retry."""
+        """A wedge on the first call, real values recovered on retry."""
         ev = self._FlakyEvaluator(fail_n=1)
         d = run_iteration.evaluate_detailed_with_retry(ev, {}, [0.0])
         self.assertEqual(ev.calls, 2)
@@ -208,7 +208,7 @@ class TestCliCommitWiring(unittest.TestCase):
     """--no-commit / --pop / --gen are wired through to run_one_iteration correctly (no Aspen).
 
     run_one_iteration is replaced with a mock so that only the CLI wiring of
-    main() is exercised. The mock invokes neither the GA nor the auto-commit, so
+    main() is exercised. The mock invokes neither the optimizer nor the auto-commit, so
     no git subprocess is started.
     """
 

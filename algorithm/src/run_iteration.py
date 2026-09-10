@@ -1,7 +1,6 @@
-"""Inner-loop driver: load SS -> GA -> detailed eval of best -> save results.json -> print signals -> auto-commit.
+"""Inner-loop driver: load SS -> inner optimizer -> detailed eval of best -> save results.json -> print signals -> auto-commit.
 
-A reduced port of main / get_next_iter_num / auto_commit_iteration from the old
-run_iteration.py. The GA itself lives in ga.run_ga, Aspen evaluation in
+The optimizers live in ga.run_ga / bo.run_bo, Aspen evaluation in
 simulator.AspenEvaluator, and signal extraction in signals.
 This module is only the driver that loads, wires, saves and commits.
 
@@ -49,16 +48,14 @@ from topology import (  # noqa: E402
 
 
 # =========================================================
-# Fixed paths (ARCH 8, 10)
+# Fixed paths (ARCH 8, 9)
 # =========================================================
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASPEN_FILE = os.path.join(HERE, "YAspen", "Yaspen.apw")
 DMP_DIR    = os.path.join(HERE, "YAspen")
 CASE_PATH  = os.path.normpath(os.path.join(HERE, "..", "case.yaml"))
-# REPO_ROOT = two levels above algorithm/src = the project root (LLM4ChemPro_ver2/)
-# The old version used dirname(dirname(__file__)), treating algorithm/ as the git root.
-# ver2 corrects this to the parent (ARCH 10).
+# REPO_ROOT = two levels above algorithm/src = the project root (the git root; ARCH 8)
 REPO_ROOT  = os.path.dirname(os.path.dirname(HERE))
 
 
@@ -108,15 +105,15 @@ def build_results_dict(
     under which random seed; seed=iteration number can drift with the directory state, so
     the value itself is stored).
     Passing case (1) aligns the naming and dimensionality of the permeance variables with
-    the GA/BO side via membrane_model, and (2) records cost_usd_per_tCO2 in performance
-    (12.2: both energy and cost are always recorded regardless of the objective setting,
+    the optimizer side via membrane_model, and (2) records cost_usd_per_tCO2 in performance
+    (10.2: both energy and cost are always recorded regardless of the objective setting,
     which guarantees comparability).
 
     Among the continuous variables, optimal_params records **only those present in the best
     topology**. Variables of units removed by pruning are free dimensions that do not affect
     the evaluation; recording whatever value the optimizer happened to leave there (often a
     bound) would make bounds_hit report a "bound hit on a membrane that does not exist" and
-    mislead the SST agent (ghost-signal prevention, review comment 2026-07-10).
+    mislead the SST agent (ghost-signal prevention).
     """
     membrane_model = (case or {}).get("membrane_model")
     bin_vars  = binary_variables(ss)
@@ -144,7 +141,7 @@ def build_results_dict(
         "total_compressor_kW":      sum(m.energy_breakdown.values()),
     }
     if case is not None:
-        # 12.2: always record cost regardless of the objective setting (comparability with
+        # 10.2: always record cost regardless of the objective setting (comparability with
         # energy). This is supplementary information, so a failure (e.g. an unsupported feed
         # format) must not bring the iteration down.
         try:
@@ -205,9 +202,9 @@ def auto_commit_iteration(
     results: dict,
     signals_obj: sig_mod.Signals,
 ) -> None:
-    """git add -A + commit. runs/ is excluded by .gitignore, so only code and docs are staged (ARCH 10).
+    """git add -A + commit. runs/ is excluded by .gitignore, so only code and docs are staged (ARCH 8).
 
-    On failure, print and swallow the error (same as the old version).
+    On failure, print and swallow the error.
     """
     try:
         run_name = os.path.basename(os.path.normpath(os.path.abspath(base_dir)))
@@ -239,7 +236,7 @@ def auto_commit_iteration(
             f"\n"
             f"## Issues\n"
             f"- Bound-hitting variables:{_format_bounds_hit(signals_obj)}\n"
-            f"- Other: TBD (add manually to docs/experiment_log.md)"
+            f"- Other: TBD"
         )
         msg = f"{title}\n\n{body}"
 
@@ -263,7 +260,7 @@ def load_case() -> dict:
     """Load algorithm/case.yaml.
 
     The caller can modify the case dict before passing it to run_one_iteration(), which
-    allows overriding GA parameters and the like without touching the case.yaml file itself
+    allows overriding optimizer parameters and the like without touching the case.yaml file itself
     (used by scratch/dryrun_iteration.py).
     """
     with open(CASE_PATH, "r", encoding="utf-8") as f:
@@ -321,9 +318,8 @@ def evaluate_detailed_with_retry(
     """Guard against transient wedges in the detailed eval of best: retry up to `retries` times if bad is returned.
 
     A point that succeeds during batch evaluation can still fail with a COM wedge in the
-    detailed evaluation alone (a fresh build plus re-convergence); this was observed on two
-    consecutive iterations in run22, with the real value recovered on the first retry
-    (i.e. transient). The detailed evaluation is a single point, so re-running is cheap
+    detailed evaluation alone (a fresh build plus re-convergence); such wedges are
+    transient, and the real value is recovered on the first retry. The detailed evaluation is a single point, so re-running is cheap
     (a few minutes), whereas leaving a sentinel value in performance in results.json would
     blind the outer loop's stopping decision and recycle judgement (stream_results). It is
     therefore worth persisting here.
@@ -360,7 +356,7 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
     ss = T.load_ss(ss_path)
     T.save_ss(ss, os.path.join(iter_dir, "ss_snapshot.json"))
 
-    # Per-evaluation JSONL log (2026-07-18, structure-space map / constraint-plane
+    # Per-evaluation JSONL log (structure-space map / constraint-plane
     # figures): every inner-loop evaluation of this iteration is appended to the
     # iteration directory. Consumed by bo.py (records "bits"); optimizers that do
     # not read the key simply ignore it.
@@ -428,7 +424,7 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
         iter_num, best, ss, detailed, gen_log, n_evals,
         optimizer=optimizer, seed=iter_num, case=case,
     )
-    # Instrumentation (2026-07-15): a breakdown of wall-clock time. Together with
+    # Instrumentation: a breakdown of wall-clock time. Together with
     # t/t_fit/t_acq/t_eval on the gen_log side, this lets later analysis separate
     # "Aspen vs optimization overhead" and "wedge losses".
     groups = evaluator.timing["groups"]
@@ -467,7 +463,7 @@ def run_one_iteration(base_dir: str, case: dict, commit: bool = True) -> dict:
     print(f"  Evaluations:      {n_evals}")
     print(f"  Saved to:         {iter_dir}/")
 
-    # auto-commit (ARCH 10: repo_root is the project root, runs/ is excluded by gitignore)
+    # auto-commit (ARCH 8: repo_root is the project root, runs/ is excluded by gitignore)
     # On a --no-commit dry run, skip it so that temporary pop/gen values are not dragged in.
     if commit:
         auto_commit_iteration(base_dir, iter_num, results, signals_obj)

@@ -455,7 +455,7 @@ class TestValidate(unittest.TestCase):
 
     def test_unreachable_dead_end_internal_is_allowed(self):
         """Check 8 does not apply to vertices unreachable from the feed.
-        (A subgraph that is not isolated but out of the feed's reach is left to the GA's BAD_VALUE.)"""
+        (A subgraph that is not isolated but out of the feed's reach is left to the optimizer's BAD_VALUE.)"""
         ss = make_minimal_ss()
         # Build an "island" unreachable from V0: V6->V7 with no arc into V6
         ss["vertices"]["V6"] = {"role": "internal", "label": "island src"}
@@ -497,7 +497,7 @@ class TestMixerSplitterVps(unittest.TestCase):
 
         In a pre-mixer layout (feed -> V6 -> COMP1 -> V7 -> membrane inlet), unless V6 is made
         a Mixer the builder never creates the inlet stream and it ends up isolated (the cause of
-        the silent BAD on every evaluation of the new seed on 2026-07-14).
+        a silent BAD on every evaluation).
         """
         ss = make_minimal_ss()
         ss["vertices"]["V6"] = {"role": "internal", "label": "COMP1 inlet (pre-mixer)"}
@@ -680,11 +680,11 @@ class TestUnitRegistry(unittest.TestCase):
         self.assertEqual(UR.get_unit_type("MEMB42"), "MEMB")
         self.assertEqual(UR.get_unit_type("COMP3"), "COMP")
         self.assertEqual(UR.get_unit_type("EXP1"), "EXP")
-        self.assertEqual(UR.get_unit_type("HEAT1"), "HEAT")   # cooler/heater (added for the 12.4 cross-check)
+        self.assertEqual(UR.get_unit_type("HEAT1"), "HEAT")   # cooler/heater (10.4)
         self.assertIsNone(UR.get_unit_type("PUMP1"))
 
     def test_expander_has_no_ga_variables(self):
-        """The expander (12.4) is a structural component with no GA variables (unchanged even with membrane_model)."""
+        """The expander (10.4) is a structural component with no optimisation variables (unchanged even with membrane_model)."""
         self.assertEqual(UR.make_ga_variables("EXP1"), [])
         self.assertEqual(UR.make_ga_variables("EXP1", membrane_model={"tie": False}), [])
         self.assertEqual(UR.get_outlet_ports("EXP"), ["outlet"])
@@ -713,7 +713,7 @@ class TestUnitRegistry(unittest.TestCase):
 
 
 # =========================================================
-# Robeson membrane model (ver3 12.1)
+# Robeson membrane model (10.1)
 # =========================================================
 
 class TestRobesonMembraneModel(unittest.TestCase):
@@ -826,8 +826,8 @@ class TestAllocateIds(unittest.TestCase):
         self.assertEqual(T.allocate_vertex_id(ss2), "V7")
         self.assertEqual(T.allocate_candidate_id(ss2), "q_2")
 
-    def test_legacy_ss_without_counters_initialized_from_max(self):
-        """The legacy format without id_counters (ss_seed.json etc.) initialises from the current maximum (backward compatible)."""
+    def test_ss_without_counters_initialized_from_max(self):
+        """An SS without id_counters (ss_seed.json etc.) initialises from the current maximum (backward compatible)."""
         if not os.path.exists(SEED_PATH):
             self.skipTest(f"seed not found at {SEED_PATH}")
         ss = T.load_ss(SEED_PATH)  # V0..V12 (the seed with two blowers), no candidates

@@ -79,7 +79,7 @@ class TestGAXAlignmentWithPruning(unittest.TestCase):
 
 
 class TestGACostObjective(unittest.TestCase):
-    """12.2: with objective=minimize_cost the GA fitness runs on the cost axis and the run completes."""
+    """10.2: with objective=minimize_cost the GA fitness runs on the cost axis and the run completes."""
 
     def test_cost_mode_completes(self) -> None:
         from ga import run_ga

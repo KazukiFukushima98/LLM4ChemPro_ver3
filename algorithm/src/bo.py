@@ -1,17 +1,16 @@
 """Bayesian optimization (standard BoTorch constrained-BO pipeline).
 
-Inner loop that runs alongside the GA. Like ga.py, it evaluates points through the
+Inner optimizer (the alternative to ga.py). Like ga.py, it evaluates points through the
 Evaluator Protocol, and it exposes the same run_bo(ss, case, evaluator, seed)
 signature so that it can be swapped in for ga.py.
 
-Design (two-phase constrained BO; split into two phases from the run22 lessons of
-2026-07-08):
+Design (two-phase constrained BO):
     - **Phase 1 (bootstrap)**: while no feasible observation exists, energy is ignored
       entirely and the constraint shortfall max(0,pi_min-pi)+max(0,rho_min-rho) is
       minimized with a single GP + qLogEI.
       Rationale: when every point is infeasible, the P(feasible) term of CEI flattens
       out and CEI degenerates into a plain energy minimizer, so it never reaches the
-      feasible basin on the high-energy side (observed in run22). A penalty method
+      feasible basin on the high-energy side. A penalty method
       (lambda=1e5) does not pick that basin on fitness either, so we minimize the
       shortfall directly, which needs no lambda.
     - **Phase 2 (CEI)**: from the iteration in which the first feasible observation
@@ -30,14 +29,14 @@ Design (two-phase constrained BO; split into two phases from the run22 lessons o
       (so the budget is not diluted).
     - best_f is the best energy among feasible observations (both constraints met).
       **If the run ends with everything still infeasible, the min-shortfall
-      observation is returned** (ties broken by the penalized fitness; 12.5(a). With
-      bootstrap: off, the legacy penalty-minimum is used instead).
-    - **Log scaling (12.5(b))**: positive continuous variables whose bounds ratio
+      observation is returned** (ties broken by the penalized fitness. With
+      bootstrap: off, the penalty-minimum is used instead).
+    - **Log scaling**: positive continuous variables whose bounds ratio
       exceeds 50 are represented internally (GP/acqf/Sobol) in log space. This
       addresses the problem that a linear Normalize squashes narrow basins until the
       GP cannot see them. Values are converted back to the real scale only just
       before being passed to the evaluator and when the best point is returned.
-      **Note**: with the Lee-consistent bounds of 12.3 (area ratio 15, p_perm ratio
+      **Note**: with the Lee-consistent bounds of 10.3 (area ratio 15, p_perm ratio
       9.9, permeance ratio 12) no variable exceeds a ratio of 50, so this **never
       fires** (it is kept as insurance for future cases that use wider ranges, e.g.
       via bounds_override; the log_scale=off line in the startup log is normal).
@@ -99,14 +98,13 @@ from topology import (  # noqa: E402
 
 
 # Defaults used when case.yaml has no bo: section (n_init ~= 2-3d as a guide, d=binary+continuous)
-# bootstrap / retry_bad are stabilizations from the run22 lessons (2026-07-08). Writing
-# `bootstrap: off` / `retry_bad: 0` under bo: in case.yaml restores the old behavior with no
-# code change (rollback switch).
+# bootstrap / retry_bad are stabilizations. Writing `bootstrap: off` / `retry_bad: 0` under
+# bo: in case.yaml disables them with no code change.
 _BO_DEFAULTS: dict[str, Any] = {
     "n_init":  16,
     "n_iter":  40,
     "q_batch":  4,
-    # Wall-clock budget in seconds (baseline protocol 2026-07-18): stop at a BATCH
+    # Wall-clock budget in seconds (used by the one-shot baseline protocol): stop at a BATCH
     # BOUNDARY (checked before each iteration's GP fit / acqf optimization) once the
     # elapsed time since the start of the optimization exceeds this. 0 = disabled
     # (the default; the SST inner loop does not set it and is unaffected). The check
@@ -118,41 +116,40 @@ _BO_DEFAULTS: dict[str, Any] = {
     #   "shortfall": ignore energy and minimize only the constraint shortfall (default).
     #     Rationale: when every point is infeasible, the P(feasible) term of CEI flattens
     #     out and CEI degenerates into a plain energy minimizer, so it never reaches the
-    #     feasible basin on the high-energy side (proven to exist by the run22 probe,
-    #     E ~= 3x). A penalty method (lambda=1e5) does not pick that basin on fitness
-    #     either (2192 vs 6226), so phase 1 minimizes the shortfall directly, with no lambda.
-    #   "off": always CEI (the behavior up to run21).
+    #     feasible basin on the high-energy side. A penalty method (lambda=1e5) does not
+    #     pick that basin on fitness either, so phase 1 minimizes the shortfall directly,
+    #     with no lambda.
+    #   "off": always CEI.
     "bootstrap": "shortfall",
     # Number of retries within the same topology for runtime bad points (wedge/crash).
     # Prevents a transient wedge (15-20% in practice) from contaminating the GP as a
     # spurious infeasible point with purity=0/recovery=0. If it is still bad after the
     # retry, it is learned as genuine non-convergence.
     "retry_bad": 1,
-    # Phase-aware patience (12.5(c)). Adaptively cuts off idle spinning once progress has
-    # plateaued (~30 min per iteration). A naive consecutive-no-improvement count was
-    # rejected (it would have discarded the 66%/50% improvement of run21 and the 34%
-    # improvement of run22), so three measures prevent premature cutoff:
+    # Phase-aware patience. Adaptively cuts off idle spinning once progress has
+    # plateaued. A naive consecutive-no-improvement count would discard late
+    # improvements, so three measures prevent premature cutoff:
     #   (1) make the decision axis phase-specific (bootstrap=min_shortfall / CEI=feasible objective)
     #   (2) reset the counter on a phase switch (bootstrap->CEI)
     #   (3) never cut off before a floor of n_iter/3 iterations
     # 0 disables it (always runs to n_iter).
     "patience": 10,
-    # Log scaling of continuous variables (12.5(b)). Positive continuous variables whose
+    # Log scaling of continuous variables. Positive continuous variables whose
     # bounds ratio exceeds _LOG_SCALE_RATIO are log-transformed in the internal
     # GP/acqf/Sobol representation. "off" pins the scale to linear.
-    # Note: with the Lee-consistent bounds of 12.3 every variable has a ratio below 50, so
+    # Note: with the Lee-consistent bounds of 10.3 every variable has a ratio below 50, so
     # nothing is selected and this effectively never fires (kept as insurance for future
     # cases that use wider ranges, e.g. via bounds_override).
     "log_scale_inputs": "on",
 }
 
-# Bounds-ratio threshold for log transformation (12.5(b): "positive continuous variables
+# Bounds-ratio threshold for log transformation ("positive continuous variables
 # whose bounds ratio exceeds 50")
 _LOG_SCALE_RATIO = 50.0
 
 
 class _PhasePatience:
-    """State machine for phase-aware patience (12.5(c)); pure logic, testable.
+    """State machine for phase-aware patience; pure logic, testable.
 
     Call update(phase, axis, it) at the end of each iteration. axis is the
     phase-specific decision value, lower is better (bootstrap=min_shortfall /
@@ -234,9 +231,9 @@ def _to_eval_space(x_np: np.ndarray, log_mask: np.ndarray) -> np.ndarray:
 
 def _fitness(obj_value: float, purity: float, recovery: float,
              targets: dict, penalty_w: float) -> float:
-    """Penalized fitness for logging and compatibility (same definition as GA._fitness).
+    """Penalized fitness for logging and compatibility (same definition as the GA path's _fitness).
 
-    obj_value is the objective value (energy or cost; it follows the objective switch of 12.2).
+    obj_value is the objective value (energy or cost; it follows the objective switch of 10.2).
     The constrained BO itself does not use this (the acqf handles constraints + objective).
     It is kept only for displaying gen_log / the best return value and for SST compatibility.
     """
@@ -261,7 +258,7 @@ def _evaluate_batch_multi(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
     """Group by binary key -> evaluate each group in a single build. Returns the objective plus 3 outcomes.
 
-    Same folding as the GA's `_evaluate_population` (points sharing a binary key are
+    Same folding as the GA path's `_evaluate_population` (points sharing a binary key are
     simulated q at a time from one Aspen build). The continuous x is narrowed by
     `x_for_topology` from the full template dimensions down to the variables of the
     concrete topology (after pruning) before being passed on, so that it lines up with
@@ -276,7 +273,7 @@ def _evaluate_batch_multi(
     Groups rejected by is_buildable are deterministically unbuildable structures, so they
     are not retried.
 
-    objective_fn (12.2): passing `(metrics, x_cont_template, topology) -> float` makes
+    objective_fn (10.2): passing `(metrics, x_cont_template, topology) -> float` makes
     objective_arr take that value (cost objective). With None, objective = energy.
 
     Returns
@@ -375,8 +372,8 @@ def _build_fixed_features(ss: dict, bin_vars: list[dict]) -> list[dict[int, floa
     Structurally unbuildable combinations, such as both sides of a toggle pair being ON,
     are known deterministically, so instead of putting them through the wasteful
     "propose -> BAD -> learn to avoid" loop they are removed from the acquisition
-    function's search space from the start (run22 lesson: invalid combinations among the
-    16 topologies diluted a budget of 264 evaluations).
+    function's search space from the start (otherwise invalid combinations dilute the
+    evaluation budget).
     Only in the pathological case where every combination is unbuildable do we fall back
     to the full enumeration as a safeguard.
     """
@@ -453,7 +450,7 @@ def run_bo(
 
     Objective: minimize energy (specific_energy_kWh_tCO2).
                When optimization_targets.objective in case.yaml is "minimize_cost",
-               minimize the annualized capture cost [$/tCO2] (evaluator.cost_per_tco2, 12.2)
+               minimize the annualized capture cost [$/tCO2] (evaluator.cost_per_tco2, 10.2)
     Constraints: purity >= purity_min, recovery >= recovery_min (from case.yaml)
 
     Returns
@@ -461,7 +458,7 @@ def run_bo(
     best     : the best x (a plain list, compatible with a DEAP Individual). If there are
                feasible observations, the one among them with the lowest energy. If
                everything is infeasible, the min-shortfall observation (ties broken by the
-               penalized fitness). Only with bootstrap: off is the legacy minimum of the
+               penalized fitness). Only with bootstrap: off is the minimum of the
                penalized fitness used
     gen_log  : [{"gen": i, "best_fitness": f, "phase": ...}, ...] (length <= n_iter; shorter
                when patience cuts the run off, in which case the last element carries an
@@ -479,7 +476,7 @@ def run_bo(
     purity_min   = float(targets["purity_min"])
     recovery_min = float(targets["recovery_min"])
 
-    # ---- Objective switch (12.2): energy (legacy) / cost ($/tCO2) ----
+    # ---- Objective switch (10.2): energy / cost ($/tCO2) ----
     # In cost mode the objective outcome of phase 2 CEI, the best selection and the logging
     # fitness all move to the cost axis. Phase 1 (bootstrap = minimizing the constraint
     # shortfall) is unchanged regardless of the objective.
@@ -505,7 +502,7 @@ def run_bo(
     log_scale_on = not _is_off(bo_cfg.get("log_scale_inputs", "on"))
     patience     = int(bo_cfg.get("patience", 10))
     max_wall_sec = float(bo_cfg.get("max_wall_sec", 0) or 0)
-    # Per-evaluation log (2026-07-18, structure-space map / constraint-plane figures):
+    # Per-evaluation log (structure-space map / constraint-plane figures):
     # if case["eval_log_path"] is set, every evaluated point appends one JSONL record
     # {bits, purity, recovery, obj, viol} (BAD -> nulls). Absent = off (no behavior
     # change). The GA-side counterpart (ga_onehot) logs "genes" (one-hot choice per
@@ -537,14 +534,14 @@ def run_bo(
                                         "recovery": None, "obj": None, "viol": None}))
         with open(eval_log_path, "a", encoding="utf-8") as f:
             f.write("\n".join(rows) + "\n")
-    # Floor: never cut off before n_iter/3 iterations (12.5(c); prevents an early cutoff
+    # Floor: never cut off before n_iter/3 iterations (prevents an early cutoff
     # during an initial plateau)
     tracker = _PhasePatience(patience, floor_iters=max(1, n_iter // 3))
 
     device = _select_device()
     dtype  = torch.double
 
-    # Log scaling (12.5(b)): for the selected dimensions the internal representation
+    # Log scaling: for the selected dimensions the internal representation
     # (bounds/Sobol/GP/acqf) is kept uniformly in log space, and _to_eval_space converts
     # back to the real scale only just before passing to the evaluator and when returning best.
     log_mask = _log_scale_mask(n_bin, cont_vars, log_scale_on)
@@ -611,13 +608,13 @@ def run_bo(
         o_capped = _clip_bad_energy(all_o_raw, all_v)   # objective value (same clipping for energy/cost)
         feasible_mask = (all_p_raw >= purity_min) & (all_r_raw >= recovery_min) & all_v
 
-        # ---- Two-phase switch (run22 lesson, 2026-07-08) ----
+        # ---- Two-phase switch ----
         # While there is no feasible observation, CEI flattens out at P(feasible) ~= 0 and
         # degenerates into a plain energy minimizer, so it never goes to the feasible basin
         # on the high-energy side. Phase 1 ignores energy entirely and minimizes only the
         # constraint shortfall, then switches to CEI from the iteration in which the first
         # feasible point appears.
-        # bootstrap="off" reverts to always-CEI (the behavior up to run21).
+        # bootstrap="off" reverts to always-CEI.
         use_bootstrap = bootstrap_on and (not bool(feasible_mask.any()))
         phase = "bootstrap" if use_bootstrap else "cei"
 
@@ -662,7 +659,7 @@ def run_bo(
 
                 # best_f: the largest objective (negated value) among feasible observations
                 # = the smallest objective.
-                # (The legacy "below the worst" path is taken only when everything is
+                # (The "below the worst" path is taken only when everything is
                 # infeasible with bootstrap="off".)
                 if feasible_mask.any():
                     best_f = float(-o_capped[feasible_mask].min())  # = max(-objective)
@@ -750,7 +747,7 @@ def run_bo(
             print(f"  Iter {it+1:2d} [{phase}]: best_fit={best_fit_log:.1f}  "
                   f"(no feasible yet, min_shortfall={min_short:.3f})")
 
-        # ---- Phase-aware patience (12.5(c)) ----
+        # ---- Phase-aware patience ----
         # Determine the phase and the decision axis from the state after the new observations
         # have been taken in (bootstrap=min_shortfall / cei=minimum feasible objective; reset
         # on a phase switch).
@@ -776,11 +773,10 @@ def run_bo(
     # observations it returns the one with the lowest objective (energy/cost) among them
     # (picking a good infeasible point would contradict the SST decision axis).
     # When everything is infeasible, the returned axis is aligned with the search axis of the
-    # bootstrap phase and the min-shortfall observation is returned (12.5(a); in run23
-    # iter_004 a point with shortfall 0.014 that the search had hit was buried by the legacy
-    # penalty-min selection and 0.063 was recorded instead). Ties are broken by the penalized
+    # bootstrap phase and the min-shortfall observation is returned (a penalty-min
+    # selection could bury the best-shortfall point). Ties are broken by the penalized
     # fitness (lexsort is a stable sort, so it is deterministic for a given seed).
-    # Only with bootstrap: off is the legacy penalty-min fallback used.
+    # Only with bootstrap: off is the penalty-min fallback used.
     final_feasible_mask = (all_p_raw >= purity_min) & (all_r_raw >= recovery_min) & all_v
     if final_feasible_mask.any():
         objective_for_select = np.where(final_feasible_mask, all_o_raw, np.inf)

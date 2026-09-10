@@ -48,7 +48,7 @@ class armed:
     """Context manager that arms the watchdog only while Aspen is being touched."""
 
     def __enter__(self):
-        _last_activity[0] = time.time()  # reset on entry, so a preceding slow GA step cannot trigger it
+        _last_activity[0] = time.time()  # reset on entry, so a preceding slow optimizer step cannot trigger it
         _armed.set()
         return self
 
@@ -117,8 +117,7 @@ def _worker():
             time.sleep(3)
             # The timeout is essential: if taskkill itself never returns against an
             # unkillable wedged Aspen, this thread -- the guaranteed last resort --
-            # blocks too (same failure mode as the 85-minute hang in run13; the same
-            # countermeasure as subprocess_evaluator._default_kill_aspen).
+            # blocks too (the same countermeasure as subprocess_evaluator._default_kill_aspen).
             try:
                 subprocess.run(
                     ["taskkill", "/F", "/IM", "AspenPlus.exe"],

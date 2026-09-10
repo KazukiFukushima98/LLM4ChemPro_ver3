@@ -113,9 +113,8 @@ class TestAddUnit(unittest.TestCase):
     def test_missing_operations_key_raises(self):
         """An ss_change without operations (e.g. a mistaken "changes" key) must raise, not apply nothing.
 
-        A real incident in run24 iter_001: the agent wrote {"changes": [...]} and the old
-        implementation silently succeeded with an empty, zero-operation apply (regression test
-        for the schema guard).
+        If the agent writes {"changes": [...]}, a naive implementation would silently
+        succeed with an empty, zero-operation apply (regression test for the schema guard).
         """
         ss = load_seed()
         with self.assertRaisesRegex(ApplyError, "operations"):
@@ -159,7 +158,7 @@ class TestAddUnit(unittest.TestCase):
         T.validate(new_ss)
 
     def test_add_expander_two_arcs_per_port(self):
-        """EXP (the expander, ver3 12.4) has the same shape as COMP (an internal expander plus a downstream process arc)."""
+        """EXP (the expander, 10.4) has the same shape as COMP (an internal expander plus a downstream process arc)."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_unit", "unit_type": "EXP", "unit": "EXP1",
@@ -174,13 +173,13 @@ class TestAddUnit(unittest.TestCase):
                          {"type": "expander", "unit": "EXP1"})
         self.assertEqual(new_ss["arcs"][("V13", "V8")], {"type": "process"})
         self.assertEqual(new_ss["units"]["EXP1"]["outlets"], {"outlet": "V13"})
-        # No new GA variable (the expander is a structural component with no variables)
+        # No new optimisation variable (the expander is a structural component with no variables)
         names = [cv["name"] for cv in T.continuous_variables(new_ss)]
         self.assertNotIn("EXP1_pout", names)
         T.validate(new_ss)
 
     def test_add_heater_two_arcs_per_port(self):
-        """HEAT (cooler/heater) has the same shape as COMP (an internal heater plus a downstream process arc) and no GA variables."""
+        """HEAT (cooler/heater) has the same shape as COMP (an internal heater plus a downstream process arc) and no optimisation variables."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_unit", "unit_type": "HEAT", "unit": "HEAT1",
@@ -199,7 +198,7 @@ class TestAddUnit(unittest.TestCase):
 
 
 # =========================================================
-# add_gated_unit (adding a unit as a GA toggle)
+# add_gated_unit (adding a unit as an optimizer-decided toggle)
 # =========================================================
 
 def _gate_memb3_on_v5() -> dict:
@@ -658,9 +657,9 @@ class TestSetBounds(unittest.TestCase):
         self.assertEqual(area_var["bounds"], [200.0, 100000.0])
 
     def test_bounds_override_equal_lo_hi_fixes_param(self):
-        """A bounds_override with lo==hi is excluded from the GA variables, i.e. the parameter is fixed (2026-07-15).
+        """A bounds_override with lo==hi is excluded from the optimisation variables, i.e. the parameter is fixed.
 
-        Used by run26's "no feed compression (pout fixed at 1.1 bar)". The value itself lives in params.
+        Used for "no feed compression (pout fixed at 1.1 bar)". The value itself lives in params.
         """
         ss = load_seed()
         ss["units"]["COMP1"]["bounds_override"] = {"outlet_pressure": [1.1, 1.1]}
@@ -674,7 +673,7 @@ class TestSetBounds(unittest.TestCase):
 
     def test_fixed_param_autofill_and_no_ga_variable(self):
         """For a parameter with lo==hi in the registry (the COMP of the blower campaign), omitting it
-        from params autofills the fixed value, and it does not become a GA variable either."""
+        from params autofills the fixed value, and it does not become an optimisation variable either."""
         ss = load_seed()
         change = {"operations": [
             {"op": "add_unit", "unit_type": "COMP", "unit": "COMP3",

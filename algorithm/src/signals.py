@@ -40,7 +40,7 @@ ENERGY_DOMINANT_SHARE = 0.5   # dominance is defined as share > 0.5
 
 @dataclass
 class BoundsHit:
-    name: str          # GA variable name (e.g. "MEMB1_area")
+    name: str          # optimisation variable name (e.g. "MEMB1_area")
     value: float
     side: str          # "lower" or "upper"
     limit: float       # bound value on the side being hit
@@ -81,7 +81,7 @@ class ConstraintViolation:
 class Signals:
     iteration: int
     specific_energy: float
-    cost_per_tco2: float | None = None   # $/tCO2 (12.2; Optional since old results lack it)
+    cost_per_tco2: float | None = None   # $/tCO2 (10.2; Optional for results without it)
     bounds_hit: list[BoundsHit] = field(default_factory=list)
     energy_blocks: list[EnergyBlock] = field(default_factory=list)
     residue_losses: list[ResidueLoss] = field(default_factory=list)
@@ -99,7 +99,7 @@ def extract_bounds_hit(
     """Detect continuous variables sitting at their bounds. Threshold: BOUNDS_HIT_SLACK.
 
     Bounds come from continuous_variables(ss), so bounds_override is applied automatically.
-    Passing membrane_model (12.1) also brings permeance variables into scope.
+    Passing membrane_model (10.1) also brings permeance variables into scope.
     """
     opt_params: dict[str, Any] = results.get("optimal_params", {}) or {}
     hits: list[BoundsHit] = []
